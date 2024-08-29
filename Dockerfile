@@ -25,4 +25,4 @@ COPY --from=builder /app/wings /usr/bin/
 ENTRYPOINT ["/usr/bin/wings"]
 CMD ["--config", "/etc/pterodactyl/config.yml"]
 
-EXPOSE 8080
+EXPOSE 8080 2022
