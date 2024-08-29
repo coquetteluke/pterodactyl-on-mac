@@ -9,6 +9,8 @@ jobs:
   release:
     name: Release
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write # write is required to create releases and push.
 
     steps:
       - name: Code Checkout
