@@ -54,20 +54,26 @@ func (fs *Filesystem) CompressFiles(dir string, paths []string) (ufs.FileInfo, e
 func (fs *Filesystem) archiverFileSystem(ctx context.Context, p string) (iofs.FS, error) {
 	f, err := fs.unixFS.Open(p)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open archive: %w", err)
+		return nil, err
 	}
 	// Do not use defer to close `f`, it will likely be used later.
 
 	format, _, err := archives.Identify(ctx, filepath.Base(p), f)
 	if err != nil && !errors.Is(err, archives.NoMatch) {
 		_ = f.Close()
-		return nil, fmt.Errorf("failed to identify archive: %w", err)
+		return nil, err
+	}
+
+	// Reset the file reader.
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		_ = f.Close()
+		return nil, err
 	}
 
 	info, err := f.Stat()
 	if err != nil {
 		_ = f.Close()
-		return nil, fmt.Errorf("failed to stat archive: %w", err)
+		return nil, err
 	}
 
 	if format != nil {
@@ -84,7 +90,6 @@ func (fs *Filesystem) archiverFileSystem(ctx context.Context, p string) (iofs.FS
 			return archiverext.FileFS{File: f, Compression: ff}, nil
 		}
 	}
-
 	_ = f.Close()
 	return nil, archives.NoMatch
 }
