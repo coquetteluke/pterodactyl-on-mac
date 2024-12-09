@@ -2,8 +2,6 @@ module github.com/pterodactyl/wings
 
 go 1.22.2
 
-toolchain go1.22.10
-
 require (
 	emperror.dev/errors v0.8.1
 	github.com/AlecAivazis/survey/v2 v2.3.7
