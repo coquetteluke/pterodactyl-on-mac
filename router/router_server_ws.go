@@ -3,13 +3,13 @@ package router
 import (
 	"context"
 	"encoding/json"
-	"time"
 
+	"emperror.dev/errors"
 	"github.com/gin-gonic/gin"
 	ws "github.com/gorilla/websocket"
-
 	"github.com/pterodactyl/wings/router/middleware"
 	"github.com/pterodactyl/wings/router/websocket"
+	"github.com/pterodactyl/wings/server"
 )
 
 var expectedCloseCodes = []int{
@@ -37,31 +37,49 @@ func getServerWebsocket(c *gin.Context) {
 		middleware.CaptureAndAbort(c, err)
 		return
 	}
-	defer handler.Connection.Close()
 
 	// Track this open connection on the server so that we can close them all programmatically
 	// if the server is deleted.
 	s.Websockets().Push(handler.Uuid(), &cancel)
 	handler.Logger().Debug("opening connection to server websocket")
+	defer s.Websockets().Remove(handler.Uuid())
 
-	defer func() {
-		s.Websockets().Remove(handler.Uuid())
-		handler.Logger().Debug("closing connection to server websocket")
-	}()
-
-	// If the server is deleted we need to send a close message to the connected client
-	// so that they disconnect since there will be no more events sent along. Listen for
-	// the request context being closed to break this loop, otherwise this routine will
-	// be left hanging in the background.
 	go func() {
 		select {
+		// When the main context is canceled (through disconnect, server deletion, or server
+		// suspension) close the connection itself.
 		case <-ctx.Done():
-			break
-		case <-s.Context().Done():
-			_ = handler.Connection.WriteControl(ws.CloseMessage, ws.FormatCloseMessage(ws.CloseGoingAway, "server deleted"), time.Now().Add(time.Second*5))
+			handler.Logger().Debug("closing connection to server websocket")
+			if err := handler.Connection.Close(); err != nil {
+				handler.Logger().WithError(err).Error("failed to close websocket connection")
+			}
 			break
 		}
 	}()
+
+	go func() {
+		select {
+		case <-ctx.Done():
+			return
+		// If the server is deleted we need to send a close message to the connected client
+		// so that they disconnect since there will be no more events sent along. Listen for
+		// the request context being closed to break this loop, otherwise this routine will
+		// be left hanging in the background.
+		case <-s.Context().Done():
+			cancel()
+			break
+		}
+	}()
+
+	// Due to how websockets are handled we need to connect to the socket
+	// and _then_ abort it if the server is suspended. You cannot capture
+	// the HTTP response in the websocket client, thus we connect and then
+	// immediately close with failure.
+	if s.IsSuspended() {
+		_ = handler.Connection.WriteMessage(ws.CloseMessage, ws.FormatCloseMessage(4409, "server is suspended"))
+
+		return
+	}
 
 	for {
 		j := websocket.Message{}
@@ -83,7 +101,11 @@ func getServerWebsocket(c *gin.Context) {
 
 		go func(msg websocket.Message) {
 			if err := handler.HandleInbound(ctx, msg); err != nil {
-				_ = handler.SendErrorJson(msg, err)
+				if errors.Is(err, server.ErrSuspended) {
+					cancel()
+				} else {
+					_ = handler.SendErrorJson(msg, err)
+				}
 			}
 		}(j)
 	}
