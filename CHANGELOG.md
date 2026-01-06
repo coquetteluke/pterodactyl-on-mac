@@ -4,7 +4,7 @@
 ### Fixed
 * [CVE-2025-68954](https://github.com/pterodactyl/panel/security/advisories/GHSA-8c39-xppg-479c)
 * [CVE-2025-69199](https://github.com/pterodactyl/panel/security/advisories/GHSA-8w7m-w749-rx98)
-* [GHSA-2497-gp99-2m74](https://github.com/pterodactyl/wings/security/advisories/GHSA-2497-gp99-2m74)
+* [CVE-2026-21696](https://github.com/pterodactyl/wings/security/advisories/GHSA-2497-gp99-2m74)
 * Fixes folders not being sorted before files when returning list of directory contents ([#5078](https://github.com/pterodactyl/panel/issues/5078))
 * User-defined labels not being passed to environment ([#191](https://github.com/pterodactyl/wings/pulls/191))
 * Fixes handling of termination signals for containers ([#192](https://github.com/pterodactyl/wings/pulls/192))
