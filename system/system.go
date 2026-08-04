@@ -61,23 +61,30 @@ func GetSystemInformation() (*Information, error) {
 		return nil, err
 	}
 
-	version, info, err := GetDockerInfo(context.Background())
-	if err != nil {
-		return nil, err
-	}
+	// Docker is absent by design on darwin, where servers run as host
+	// processes. A missing daemon used to fail this whole endpoint with a 500,
+	// which the Panel calls to render a node's system information, so a macOS
+	// node reported nothing at all. Report what is knowable instead.
+	version, info, dockerErr := GetDockerInfo(context.Background())
 
-	release, err := osrelease.Read()
-	if err != nil {
-		return nil, err
-	}
+	// /etc/os-release is Linux-only; its absence is not an error either.
+	release, _ := osrelease.Read()
 
 	var os string
 	if release["PRETTY_NAME"] != "" {
 		os = release["PRETTY_NAME"]
 	} else if release["NAME"] != "" {
 		os = release["NAME"]
-	} else {
+	} else if dockerErr == nil {
 		os = info.OperatingSystem
+	} else {
+		os = hostOSName()
+	}
+
+	// The daemon normally reports the host's memory. Without it, ask the kernel.
+	memTotal := info.MemTotal
+	if dockerErr != nil || memTotal == 0 {
+		memTotal = hostMemoryBytes()
 	}
 
 	var filesystem string
@@ -114,7 +121,7 @@ func GetSystemInformation() (*Information, error) {
 		System: System{
 			Architecture:  runtime.GOARCH,
 			CPUThreads:    runtime.NumCPU(),
-			MemoryBytes:   info.MemTotal,
+			MemoryBytes:   memTotal,
 			KernelVersion: k.String(),
 			OS:            os,
 			OSType:        runtime.GOOS,
