@@ -25,7 +25,7 @@ PANEL_DIR="${PANEL_DIR:-$HOME/pterodactyl-panel}"
 # block is parsed first, so it would win as the default server for the port and
 # the Panel would silently never be reached. Pick a port it does not claim.
 PANEL_PORT="${PANEL_PORT:-8088}"
-LABEL="com.github.pterodactyl-on-mac"
+LABEL="${WINGS_LABEL:-com.github.pterodactyl-on-mac}"
 
 # Panel 1.15 accepts PHP 8.2 or 8.3 only. Homebrew's unversioned "php" is 8.4
 # or newer, which composer refuses outright, so pin the version rather than
@@ -115,6 +115,7 @@ for arg in "$@"; do
     --no-isolate) ISOLATE=0 ;;
     --turn-isolation-on) ACTION=isolate ;;
     --turn-isolation-off) ACTION=revert ;;
+    --update) ACTION=update ;;
     --uninstall) ACTION=uninstall ;;
     --purge) ACTION=uninstall; PURGE=1 ;;
     -y|--yes) ASSUME_YES=1 ;;
@@ -148,6 +149,7 @@ below instead if you are scripting it.
 
     --turn-isolation-on    turn isolation on for an existing install
     --turn-isolation-off   turn it back off, handing the server files back
+    --update               replace wings with the latest release and restart it
     --uninstall            remove wings, keeping your server data
     --purge                remove wings and the server data too
 
@@ -185,8 +187,9 @@ interview() {
   if [ -z "$ACTION" ]; then
     if wings_installed && have_tty; then
       printf '\n'
-      ACTION=$(ask_choice "This Mac already has a node on it. What do you want to do?" install \
-        "install:Reinstall or update it" \
+      ACTION=$(ask_choice "This Mac already has a node on it. What do you want to do?" update \
+        "update:Update wings to the latest release, without interrupting your servers" \
+        "install:Reinstall it from scratch" \
         "isolate:Turn isolation on" \
         "revert:Turn isolation off" \
         "uninstall:Remove it")
@@ -196,6 +199,10 @@ interview() {
   fi
 
   case "$ACTION" in
+    update)
+      update_wings
+      exit 0
+      ;;
     isolate)
       exec sudo "$(fetch_helper isolate.sh pterodactyl-isolate)"
       ;;
@@ -595,6 +602,61 @@ install_isolate_script() {
 # decides whether the first question is "what do you want" or "what now".
 wings_installed() {
   [ -x "${PREFIX}/wings" ] || [ -f "${DATA_DIR}/config.yml" ]
+}
+
+# restart_wings restarts the daemon wherever it happens to be registered.
+#
+# It lives in the system domain once isolation is on and in the user's domain
+# otherwise, and picking the wrong one silently does nothing.
+restart_wings() {
+  if [ -f "/Library/LaunchDaemons/${LABEL}.plist" ]; then
+    sudo launchctl kickstart -k "system/${LABEL}" 2>/dev/null && return 0
+  fi
+  if launchctl print "gui/$(id -u)/${LABEL}" >/dev/null 2>&1; then
+    launchctl kickstart -k "gui/$(id -u)/${LABEL}" 2>/dev/null && return 0
+  fi
+  return 1
+}
+
+# update_wings replaces the binary and restarts, leaving everything else alone.
+#
+# Your game servers keep running throughout. They are detached into their own
+# sessions precisely so they survive wings restarting, and the new wings adopts
+# them by pid on the way back up, so updating costs no downtime for players.
+update_wings() {
+  local before after
+  before=$("${PREFIX}/wings" version 2>/dev/null | head -1)
+  [ -n "$before" ] || die "no wings found at ${PREFIX}/wings; install it first"
+  info "Installed: ${before}"
+
+  local latest
+  latest=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+    | awk -F'"' '/"tag_name"/ {print $4; exit}')
+  [ -n "${latest:-}" ] || die "could not reach GitHub to check for a newer release"
+
+  # `wings version` prints "wings v1.2.3", the tag is "v1.2.3".
+  if [ "$before" = "wings ${latest}" ]; then
+    info "Already on the latest release (${latest}). Nothing to do."
+    return 0
+  fi
+  info "Latest is ${latest}"
+
+  # Downloads to a temporary directory, verifies the checksum, and only then
+  # renames into place. A rename is what makes replacing a running binary safe:
+  # writing to it directly fails with ETXTBSY, and the running process keeps
+  # the old inode until it is restarted either way.
+  install_wings
+
+  after=$("${PREFIX}/wings" version 2>/dev/null | head -1)
+  if restart_wings; then
+    info "Restarted wings. Your game servers were not interrupted."
+  else
+    warn "could not restart wings automatically; the new binary is installed but not yet running"
+  fi
+
+  printf '\n'
+  info "${before}  ->  ${after}"
+  printf '\n'
 }
 
 # setup_isolation turns on everything that stands in for a container.

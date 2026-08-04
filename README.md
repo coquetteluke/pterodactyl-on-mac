@@ -28,7 +28,7 @@ elsewhere, or run the Panel too. Add `--full` or `--node` to answer it up front,
 or `--yes` to skip the questions entirely.
 
 **That one command is the only one you need.** Run it again later on a machine
-that already has a node and it asks what to do instead: reinstall, turn
+that already has a node and it asks what to do instead: update, reinstall, turn
 isolation on or off, or remove it.
 
 ## ⚠️ Before you deploy it
@@ -45,7 +45,9 @@ Full detail, including exactly what is and is not enforced, is in
 
 **Getting going**
 - [Quick start](#quick-start)
-- [Install](#install) - the long version, and how to uninstall
+- [Install](#install) - the long version
+- [Updating](#updating) - and why your servers stay up
+- [Uninstalling](#uninstalling)
 - [Walkthrough: your first server](#walkthrough-your-first-server)
 
 **Isolation**
@@ -186,6 +188,27 @@ chmod +x wings_darwin_arm64 && mv wings_darwin_arm64 ~/.local/bin/wings
 ```
 
 Use `wings_darwin_amd64` on an Intel Mac.
+
+### Updating
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/coquetteluke/pterodactyl-on-mac/main/install.sh | bash -s -- --update
+```
+
+Or run the plain command on a machine that already has a node, and updating is
+the first thing it offers.
+
+It checks the installed version against the latest release and stops if there is
+nothing to do. Otherwise it downloads the new binary, verifies it against the
+published `SHA256SUMS`, replaces it, and restarts wings.
+
+**Your game servers keep running the whole time.** They are detached into their
+own sessions specifically so they survive wings restarting, and the new wings
+adopts them by pid on the way back up, so players are not disconnected. Nothing
+about your configuration or isolation is touched.
+
+The replacement is a rename rather than a write, which is what makes swapping a
+running binary safe: writing to one directly fails with `ETXTBSY`.
 
 ### Uninstalling
 
