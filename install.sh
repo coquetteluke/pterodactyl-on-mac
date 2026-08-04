@@ -36,16 +36,82 @@ info()  { printf '\033[1;34m==>\033[0m %s\n' "$1"; }
 warn()  { printf '\033[1;33m warning:\033[0m %s\n' "$1" >&2; }
 die()   { printf '\033[1;31m error:\033[0m %s\n' "$1" >&2; exit 1; }
 
+# have_tty reports whether there is a human to ask.
+#
+# This script is normally run as `curl ... | bash`, which makes stdin the script
+# itself. A plain `read` would consume the rest of the script rather than wait
+# for an answer, so questions are asked on /dev/tty instead. When there is no
+# terminal at all, as in CI, every question falls back to its default.
+#
+# The test has to be an actual open. /dev/tty exists and passes -r and -w even
+# when the process has no controlling terminal; it is only opening it that fails,
+# with "Device not configured". Testing the permissions instead means a piped,
+# terminal-less run tries to prompt and dies.
+have_tty() {
+  [ "${ASSUME_YES:-0}" = 0 ] || return 1
+  { : < /dev/tty; } 2>/dev/null || return 1
+  { : > /dev/tty; } 2>/dev/null
+}
+
+# ask_yn asks a yes/no question. $2 is the answer used when nobody is there.
+ask_yn() {  # question, default (y|n)
+  local q=$1 default=$2 reply hint
+  if ! have_tty; then [ "$default" = y ]; return; fi
+  [ "$default" = y ] && hint="[Y/n]" || hint="[y/N]"
+  while true; do
+    printf '\033[1;36m ?\033[0m %s %s ' "$q" "$hint" > /dev/tty
+    read -r reply < /dev/tty || reply=""
+    reply=${reply:-$default}
+    case "$reply" in
+      [Yy]|[Yy][Ee][Ss]) return 0 ;;
+      [Nn]|[Nn][Oo])     return 1 ;;
+      *) printf '    please answer y or n\n' > /dev/tty ;;
+    esac
+  done
+}
+
+# ask_choice presents a numbered menu and echoes the chosen value.
+ask_choice() {  # question, default_value, then value:label pairs
+  local q=$1 default=$2; shift 2
+  local n=1 reply
+  if ! have_tty; then echo "$default"; return; fi
+  printf '\033[1;36m ?\033[0m %s\n' "$q" > /dev/tty
+  local pair
+  for pair in "$@"; do
+    printf '     %d) %s\n' "$n" "${pair#*:}" > /dev/tty
+    n=$((n + 1))
+  done
+  while true; do
+    printf '    choose [1-%d, default %s] ' "$#" "1" > /dev/tty
+    read -r reply < /dev/tty || reply=""
+    reply=${reply:-1}
+    case "$reply" in
+      ''|*[!0-9]*) ;;
+      *) if [ "$reply" -ge 1 ] && [ "$reply" -le "$#" ]; then
+           eval "pair=\${$reply}"
+           echo "${pair%%:*}"
+           return
+         fi ;;
+    esac
+    printf '    please pick a number between 1 and %d\n' "$#" > /dev/tty
+  done
+}
+
 main() {
-MODE=node
-LAUNCHAGENT=0
-ISOLATE=0
+# Unset rather than 0/1, so that asking questions can be skipped for anything
+# the command line already answered.
+MODE=""
+LAUNCHAGENT=""
+ISOLATE=""
+ASSUME_YES=0
 for arg in "$@"; do
   case "$arg" in
     --full|--panel) MODE=full ;;
     --node) MODE=node ;;
     --launchagent) LAUNCHAGENT=1 ;;
     --isolate) ISOLATE=1 ;;
+    --no-isolate) ISOLATE=0 ;;
+    -y|--yes) ASSUME_YES=1 ;;
     -h|--help)
       # Printed inline rather than read back out of $0: when this script is
       # piped into bash there is no file to read.
@@ -61,14 +127,16 @@ Installer for Pterodactyl on Mac.
 
     curl -fsSL https://raw.githubusercontent.com/coquetteluke/pterodactyl-on-mac/main/install.sh | bash -s -- --full
 
+Run it with no options and it asks you what you want. Answer with the flags
+below instead if you are scripting it.
+
   Options:
-    --node          install only the wings daemon (default)
+    --node          install only the wings daemon
     --full          also install the Panel, MariaDB, PHP and nginx
-    --launchagent   install a LaunchAgent so wings starts at login
-    --isolate       set up the isolation stack: an account per server, a
-                    filesystem sandbox, and per-server firewall rules. Runs
-                    wings as root via a LaunchDaemon, which it needs to
-                    create accounts and load pf rules.
+    --launchagent   start wings automatically
+    --isolate       an account, a sandbox and firewall rules per server (default)
+    --no-isolate    skip that, and run every server as one unprivileged user
+    -y, --yes       take the defaults, ask nothing
 
 This fork removes the container boundary that upstream Wings relies on for
 isolation. It is for single-tenant machines only. See
@@ -88,7 +156,52 @@ case "$(uname -m)" in
   x86_64) ARCH=amd64 ;;
   *) die "unsupported architecture: $(uname -m)" ;;
 esac
+
+interview
 run
+}
+
+# interview fills in anything the command line did not answer.
+#
+# Every question has a default that is applied when there is no terminal, so the
+# same script works piped from curl, run by hand, and from a script.
+interview() {
+  if [ -z "$MODE" ]; then
+    if have_tty; then printf '\n'; fi
+    MODE=$(ask_choice "What should this Mac do?" node \
+      "node:Run game servers for a Panel on another machine, a Pi for instance" \
+      "full:Everything on this Mac: the Panel and the game servers")
+  fi
+
+  if [ -z "$ISOLATE" ]; then
+    if have_tty; then
+      cat > /dev/tty <<'EOF'
+
+    Isolation gives every server its own account, its own view of the disk,
+    and its own firewall rules, so one server cannot read another's files,
+    read your Panel token, or reach the rest of your network.
+
+    It needs to run wings as root in order to create those accounts. The game
+    servers themselves end up with fewer privileges than without it, not more.
+
+EOF
+    fi
+    if ask_yn "Turn on isolation?" y; then ISOLATE=1; else ISOLATE=0; fi
+  fi
+
+  if [ -z "$LAUNCHAGENT" ]; then
+    if ask_yn "Start wings automatically when this Mac boots?" y; then
+      LAUNCHAGENT=1
+    else
+      LAUNCHAGENT=0
+    fi
+  fi
+
+  if have_tty; then
+    printf '\n'
+    info "Installing: $([ "$MODE" = full ] && echo 'Panel and node' || echo 'node only')$([ "$ISOLATE" = 1 ] && echo ', isolated')$([ "$LAUNCHAGENT" = 1 ] && echo ', starts at boot')"
+    printf '\n'
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -447,8 +560,27 @@ EOF
     return 0
   fi
 
-  sudo "${PREFIX}/pterodactyl-isolate" \
-    || die "isolation setup failed; wings has been left as it was"
+  # Isolation is the default, so it must not be able to fail the whole install.
+  # Without a terminal there is nowhere for sudo to ask for a password, and a
+  # scripted run would otherwise die here having already installed everything
+  # else successfully.
+  if ! sudo -n true 2>/dev/null && ! have_tty; then
+    cat <<EOF
+
+$(warn "isolation skipped: it needs sudo, and there is no terminal to ask for a password")
+
+  Everything else installed. Turn isolation on when you are at a terminal:
+
+      sudo ${PREFIX}/pterodactyl-isolate
+
+EOF
+    return 0
+  fi
+
+  if ! sudo "${PREFIX}/pterodactyl-isolate"; then
+    warn "isolation setup did not complete; wings has been left as it was"
+    printf '  Retry it on its own with: sudo %s/pterodactyl-isolate\n\n' "$PREFIX"
+  fi
 }
 
 run() {

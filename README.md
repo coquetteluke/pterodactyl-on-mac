@@ -2,112 +2,67 @@ fyi this is 100% claude ai. i dont know how to code nor work github. idk if ill 
 
 # Pterodactyl on Mac
 
-An **unofficial** fork of [Pterodactyl Wings](https://github.com/pterodactyl/wings)
-that runs game servers natively on macOS, as ordinary host processes instead of
-Docker containers.
+Run Pterodactyl game servers natively on macOS. No virtual machine, no Docker.
 
-Not affiliated with or endorsed by the Pterodactyl project. Tracking Wings
-**v1.13.2**.
+An **unofficial** fork of [Pterodactyl Wings](https://github.com/pterodactyl/wings),
+tracking **v1.13.2**. Not affiliated with or endorsed by the Pterodactyl project.
 
----
+## Quick start
 
-## ⚠️ Read this before deploying it
+```bash
+curl -fsSL https://raw.githubusercontent.com/coquetteluke/pterodactyl-on-mac/main/install.sh | bash
+```
 
-**This fork removes the container boundary. Do not use it for shared or
-multi-tenant hosting.**
+It asks a few questions and sets everything up. The defaults are the right
+answer for most people, so you can press enter through all of them.
 
-Upstream Wings runs every server in its own Docker container, and a great deal
-of Pterodactyl's security model rests on that. This fork has no containers.
+You get, by default:
 
-**Out of the box there is no isolation at all.** Every server runs as the same
-user with that user's full filesystem access, so one server can read and modify
-another's files, and can read `config.yml`, which holds the node token that
-authenticates to your Panel. Every server can also reach anything the machine
-can: your Panel, other servers, the rest of your network.
+- **An account, a sandbox and firewall rules for every server**, so one server
+  cannot read another's files, read your Panel token, or reach the rest of your
+  network. This is on unless you turn it off.
+- **Wings starting automatically** when the Mac boots.
 
-Most of that can be rebuilt from what macOS does have, but **all of it is opt-in
-and off by default**. One command turns on all three
-([isolation](#turning-on-isolation)):
+Add `--full` if you want the Panel on this Mac too, rather than running it from
+a Pi or another machine. Add `--yes` to skip the questions entirely.
 
-| what it covers | how it works | |
-| --- | --- | --- |
-| Filesystem | an account per server, plus the kernel sandbox | [details](#per-server-accounts) |
-| Network | pf rules matched on each server's uid | [details](#network-isolation) |
-| Processes | separate accounts refuse cross-server signals; the sandbox can hide other processes entirely | [details](#process-isolation) |
-| Process count | `RLIMIT_NPROC`, enforced by the kernel, so a fork bomb hits its own ceiling | [details](#process-isolation) |
-| Memory and CPU | supervision, not kernel quotas | [details](#resource-limits) |
+## ⚠️ Before you deploy it
 
-**What still has no equivalent here**, and cannot be given one. These are the
-reasons this is not safe to rent out, and none of them is going to be fixed:
+**Do not rent servers on this to other people.** Isolation on this fork is real
+but resource limits are not: macOS has no cgroups and no disk quotas, so one
+server can still degrade or halt the machine everything else runs on. That is
+not fixable, and it is why this is for a machine where you own every server.
 
-- **Memory and CPU limits react rather than prevent.** macOS has no cgroups and
-  no public per-process CPU quota. Wings watches and intervenes: memory is
-  sampled once a second, and CPU is capped by stopping the process in short
-  bursts. Enough to stop one server ruining a machine; not a kernel quota. A
-  server that allocates several gigabytes instantly still wins the race.
-- **The filesystem sandbox denies by exception, not by default.** It withholds
-  what you name. It does not confine a server to a private view of the disk the
-  way a mount namespace does, so a server can still read world-readable files
-  elsewhere on the machine.
-- **No disk quotas.** APFS does not support them at all, so a server can fill
-  the disk and take the machine down with it. Neither does upstream enforce a
-  quota at write time, but on Linux you can at least put servers on a quota'd
-  filesystem. Here you cannot.
+Full detail, including exactly what is and is not enforced, is in
+[what isolation does and does not cover](#what-isolation-does-and-does-not-cover).
 
-So the shape of it: **the isolation boundaries are real, and the resource
-boundaries are not.** A hostile server can be kept out of your files, off your
-network and away from your other servers. It cannot reliably be stopped from
-degrading or halting the machine everything runs on.
+## Contents
 
-So: **do not rent servers on this to strangers.** If you are running a homelab
-node where you own every server, the isolation above is worth turning on and is
-a real improvement over nothing. If you are hosting for other people, use
-upstream Wings on Linux.
+**Getting going**
+- [Quick start](#quick-start)
+- [Install](#install) - the long version, and how to uninstall
+- [Walkthrough: your first server](#walkthrough-your-first-server)
 
----
+**Isolation**
+- [What isolation does and does not cover](#what-isolation-does-and-does-not-cover)
+- [Per-server accounts](#per-server-accounts)
+- [Filesystem sandbox](#filesystem-sandbox)
+- [Process isolation](#process-isolation)
+- [Network isolation](#network-isolation)
+- [Resource limits](#resource-limits) - memory and CPU
 
-## Why this exists
+**When it breaks**
+- [Troubleshooting](#troubleshooting)
+- [Where to look when something breaks](#where-to-look-when-something-breaks)
+- [macOS gotcha: Local Network permission](#macos-gotcha-local-network-permission)
 
-macOS cannot run Linux containers. Every "Docker for Mac" runtime (Docker
-Desktop, Colima, OrbStack, Rancher) boots a Linux VM to do it, and Apple's own
-`container` framework runs a micro-VM per container and requires Apple silicon.
-So "run Pterodactyl on a Mac" has always meant "run a Linux VM on a Mac."
-
-This fork replaces Wings' container layer with host processes, so a Mac can be a
-Pterodactyl node with no VM involved.
-
-## What works
-
-- Full Panel integration: console, file manager, SFTP, power actions, and live
-  CPU / memory / disk graphs
-- Servers **survive a Wings restart**. stdin is a FIFO, stdout is a log file,
-  and the process gets its own session, so a later Wings adopts it by pid
-- Backups, transfers and the egg install flow
-- Linux is unaffected: the Docker environment is untouched and still the default
-  there
-
-## What is different or missing
-
-| | upstream | this fork |
-| --- | --- | --- |
-| filesystem isolation | mount namespace per server | unix accounts + kernel sandbox, opt-in |
-| network isolation | network namespace per server | pf rules keyed on uid, opt-in |
-| process isolation | PID namespace per server | none, servers can see each other's processes |
-| memory limit | enforced by the kernel | enforced by supervision, ~1s latency |
-| CPU limit | enforced via cgroups | enforced by supervision, opt-in |
-| egg install | runs in the installer image | runs on the host (see below) |
-| server user | dedicated `pterodactyl` user | the user running Wings, or an account per server when isolation is on |
-
-Egg install scripts hardcode `/mnt/server` and `/mnt/install`. There is nothing
-to mount those onto, and macOS's sealed root filesystem means `/mnt` cannot even
-be created, so the script text is rewritten to point at the real directories.
-This works for essentially every real egg, but a script that assembles a path at
-runtime (`cd /mnt/${dir}`) will not be caught and will fail.
-
-They also assume the installer image's toolbox. `curl`, `tar` and `unzip` are on
-macOS already; `jq` and `wget` are not, and plenty of eggs need them, so the
-installer adds both. Anything the *startup* command invokes, such as `java`, `node`
-or `python`, you must install yourself, since no image supplies it.
+**Background**
+- [Why this exists](#why-this-exists)
+- [What works](#what-works)
+- [What is different or missing](#what-is-different-or-missing)
+- [Is it actually faster than a VM?](#is-it-actually-faster-than-a-vm)
+- [Notes for anyone porting Wings elsewhere](#notes-for-anyone-porting-wings-elsewhere)
+- [Tests](#tests) / [Support](#support) / [License](#license)
 
 ## Install
 
@@ -125,35 +80,43 @@ curl -fsSL https://raw.githubusercontent.com/coquetteluke/pterodactyl-on-mac/mai
 
 That picks the right binary for your Mac (Apple silicon or Intel), verifies it
 against the published `SHA256SUMS`, installs it to `~/.local/bin/wings`, creates
-the data directories, and prints the configuration you still need to do. Add
-`-s -- --launchagent` to also install a LaunchAgent that keeps it running.
+the data directories, and prints the configuration you still need to do.
 
 You then create the node in your existing Panel and paste its config here. Set
 the node's **Daemon Port to 8443**, not 443, because an unprivileged process
 cannot bind a port below 1024.
 
-### Turning on isolation
+### The questions it asks
 
-Add `-s -- --isolate` to either install mode to set up everything that stands in
-for a container: an account per server, the kernel filesystem sandbox, and
-per-server firewall rules.
+Three, each with a default you can accept by pressing enter:
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/coquetteluke/pterodactyl-on-mac/main/install.sh | bash -s -- --isolate
-```
+| question | default | flag to answer it up front |
+| --- | --- | --- |
+| Node only, or Panel too? | node only | `--node` / `--full` |
+| Turn on isolation? | **yes** | `--isolate` / `--no-isolate` |
+| Start wings at boot? | yes | `--launchagent` |
 
-That switches on all three layers, moves wings to a **LaunchDaemon running as
-root** so it can create accounts and load firewall rules, and adds the anchor
-lines to `/etc/pf.conf` (backing the original up to `/etc/pf.conf.wings-backup`,
-and restoring it automatically if the edit does not parse). Servers themselves
-end up less privileged than before, since each drops to its own account.
+`--yes` accepts all three without asking. When there is no terminal at all, as
+in a script or CI, the defaults are used, so isolation is on unless you pass
+`--no-isolate`.
+
+### Isolation
+
+On by default. It gives every server its own account, its own view of the disk
+and its own firewall rules, moves wings to a **LaunchDaemon running as root** so
+it can create those accounts and load the rules, and adds the anchor lines to
+`/etc/pf.conf` (backing the original up to `/etc/pf.conf.wings-backup`, and
+restoring it automatically if the edit does not parse). The servers themselves
+end up with fewer privileges than without it, since each drops to its own
+account.
 
 Then restart your servers from the Panel. Each one picks up its account, its
 sandbox and its firewall rules on its next boot.
 
 If your Panel lives on another machine, `config.yml` does not exist until you
-have created the node and pasted its configuration in. The installer notices
-that and leaves you a command to run once you have:
+have created the node and pasted its configuration in, and isolation has to be
+written into that file. The installer notices and leaves you one command to run
+once you have:
 
 ```bash
 sudo ~/.local/bin/pterodactyl-isolate
@@ -184,6 +147,8 @@ Panel and node together, nothing else needed:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/coquetteluke/pterodactyl-on-mac/main/install.sh | bash -s -- --full
 ```
+
+Or just run the plain command and pick the second option when it asks.
 
 This installs PHP, MariaDB and nginx through Homebrew, downloads the Panel, sets
 up its database, creates an admin account, and installs wings alongside it. The
@@ -348,180 +313,57 @@ if you want it to survive reboots.
 there is no container. Replace it with an explicit `-Xmx` under the server's
 memory limit.
 
-## Where to look when something breaks
+## What isolation does and does not cover
 
-Everything is a plain file. Assuming the paths above:
+Upstream Wings runs every server in its own Docker container, and a great deal
+of Pterodactyl's security model rests on that. This fork has no containers.
 
-| what | where |
-| --- | --- |
-| wings' own log | `~/pterodactyl/logs/wings.stderr.log` (or the terminal) |
-| a server's console | `~/pterodactyl/native/<server-uuid>/console.log` |
-| a server's install log | `~/pterodactyl/logs/install/<server-uuid>.log` |
-| the server's files | `~/pterodactyl/volumes/<server-uuid>/` |
-| what wings is running as | `ps aux \| grep "[w]ings"` |
+**Out of the box there is no isolation at all.** Every server runs as the same
+user with that user's full filesystem access, so one server can read and modify
+another's files, and can read `config.yml`, which holds the node token that
+authenticates to your Panel. Every server can also reach anything the machine
+can: your Panel, other servers, the rest of your network.
 
-If those paths do not exist, wings is using different ones, so check
-`root_directory` in your `config.yml`. If they exist but you get "no such file"
-or empty globs, wings is running as root and your shell cannot see into them;
-that is a sign to go back to step 3.
+Most of that can be rebuilt from what macOS does have, but **all of it is opt-in
+and off by default**. One command turns on all three
+([isolation](#isolation)):
 
-## Is it actually faster than a VM?
-
-Mostly no. The win is memory, not speed.
-
-These are measured on one machine, a 2019 Intel MacBook Pro with 16 GB running a
-Paper 26.2 server and 43 plugins, comparing the same server before and after
-it was moved off a Lima VM (8 vCPU, 12 GiB, `vz`) onto the host.
-
-| | VM | native |
+| what it covers | how it works | |
 | --- | --- | --- |
-| server startup | 39.7s (n=16) | ~38.6s |
-| cold read, 130 MB / 244 files | 257 ms | 220 ms |
-| memory reserved | 12 GiB | what the server uses (5.5 GB) |
-| LAN round trip | ~0.4 ms | ~0.4 ms |
+| Filesystem | an account per server, plus the kernel sandbox | [details](#per-server-accounts) |
+| Network | pf rules matched on each server's uid | [details](#network-isolation) |
+| Processes | separate accounts refuse cross-server signals; the sandbox can hide other processes entirely | [details](#process-isolation) |
+| Process count | `RLIMIT_NPROC`, enforced by the kernel, so a fork bomb hits its own ceiling | [details](#process-isolation) |
+| Memory and CPU | supervision, not kernel quotas | [details](#resource-limits) |
 
-**Startup time does not improve.** Apple's Virtualization.framework is
-hardware-accelerated, so CPU-bound JVM work already ran at close to native
-speed. Sixteen boots from the VM era averaged 39.7s; the quietest native boot
-was 38.6s. That is a wash, and it is the honest answer to "will my server run
-faster": it will not, noticeably.
+**What still has no equivalent here**, and cannot be given one. These are the
+reasons this is not safe to rent out, and none of them is going to be fixed:
 
-**Disk I/O improves by around 14%**, which is the virtio-blk and disk-image
-layers going away. Worth having for a Minecraft server, which does a lot of
-small random reads, but not transformative.
+- **Memory and CPU limits react rather than prevent.** macOS has no cgroups and
+  no public per-process CPU quota. Wings watches and intervenes: memory is
+  sampled once a second, and CPU is capped by stopping the process in short
+  bursts. Enough to stop one server ruining a machine; not a kernel quota. A
+  server that allocates several gigabytes instantly still wins the race.
+- **The filesystem sandbox denies by exception, not by default.** It withholds
+  what you name. It does not confine a server to a private view of the disk the
+  way a mount namespace does, so a server can still read world-readable files
+  elsewhere on the machine.
+- **No disk quotas.** APFS does not support them at all, so a server can fill
+  the disk and take the machine down with it. Neither does upstream enforce a
+  quota at write time, but on Linux you can at least put servers on a quota'd
+  filesystem. Here you cannot.
 
-Beware of measuring this badly: dropping caches *inside* the guest does not
-evict the disk image from the *host's* page cache, so the VM's "cold" read is
-served from host RAM and looks about twice as fast as native. Both layers have
-to be purged for the comparison to mean anything.
+So the shape of it: **the isolation boundaries are real, and the resource
+boundaries are not.** A hostile server can be kept out of your files, off your
+network and away from your other servers. It cannot reliably be stopped from
+degrading or halting the machine everything runs on.
 
-**Memory is the real difference.** A VM reserves what you give it whether the
-workload needs it or not. 12 GiB of a 16 GiB machine was committed to running a
-process that fits in 5.5 GB. Getting that back is the reason to do this, and on
-a machine with plenty of RAM to spare the case is much weaker.
+So: **do not rent servers on this to strangers.** If you are running a homelab
+node where you own every server, the isolation above is worth turning on and is
+a real improvement over nothing. If you are hosting for other people, use
+upstream Wings on Linux.
 
-**Networking is unchanged** if the VM was already bridged. Lima's default
-userspace port forwarding costs real latency, roughly 31 ms as observed here
-before bridging, but `socket_vmnet` removes that without leaving the VM.
-
-The operational difference does not show up in a benchmark: the VM is another
-thing that has to be running. Backups on this node silently stopped for two
-days because the VM was powered off, not because anything failed.
-
-## Resource limits
-
-### Watch out for `MaxRAMPercentage` in egg startup commands
-
-Several stock eggs, including Paper, start the JVM with something like
-`-Xms128M -XX:MaxRAMPercentage=95.0`. Inside a container that is exactly right:
-the JVM reads the cgroup limit and sizes its heap to 95% of what the server was
-given.
-
-There is no cgroup here, so the JVM reads the **whole machine** instead. On a
-16 GB Mac a server with a 4 GB limit will happily grow its heap toward 15 GB,
-sail past its limit, and be killed for it.
-
-Replace the percentage with an explicit ceiling that matches the Panel's memory
-limit, for example on a 4 GB server:
-
-```
-java -Xms1024M -Xmx3584M -jar {{SERVER_JARFILE}}
-```
-
-Leave headroom: `-Xmx` bounds the Java heap, not the whole process, and the JVM
-also needs metaspace, thread stacks and off-heap buffers on top.
-
-### Memory: enforced, with caveats
-
-Wings already samples every server's resident memory once a second for the
-Panel's graphs. When a server stays above its limit for five consecutive
-samples it is killed and reported to the Panel as an out-of-memory kill, which
-is the same thing the Panel shows when a cgroup kills a container.
-
-The threshold is the Panel's memory limit plus the same overhead allowance
-Docker applies, so both environments kill at the same number. The five-sample
-grace exists so that a JVM briefly touching its ceiling before a collection is
-not mistaken for a runaway.
-
-Two honest differences from a kernel limit:
-
-- **It is about a second late.** A cgroup refuses the allocation that would
-  cross the limit; this notices afterwards. A fast allocation burst can
-  overshoot in between, so this protects the machine from a server that leaks,
-  not from one that allocates several gigabytes instantly.
-- **It kills rather than refuses.** There is no way to make an allocation fail
-  from outside the process.
-
-Turn it off with:
-
-```yaml
-system:
-  enforce_memory_limit: false
-```
-
-A server with no configured limit is never killed for memory. Its ceiling is the
-machine, and it was allowed to use it.
-
-#### If you use `-XX:+AlwaysPreTouch`, the default 5% overhead is too tight
-
-The default allowance is the Panel's limit plus 5%, which assumes a process
-whose resident memory tracks what it is really using. A JVM started with
-`AlwaysPreTouch` commits its whole heap at startup instead, so an 8 GB heap
-shows roughly 9 GB resident from the first second and stays there. Against a
-10 GB Panel limit that is 84% of the kill threshold while the server is idle,
-and normal load pushes it over.
-
-The symptom is a server killed and reported as out of memory while its own
-metrics look fine, because the heap is nowhere near full. The heap is not the
-problem; metaspace, code cache, thread stacks, direct buffers and the collector's
-own structures all sit outside it.
-
-Give the non-heap overhead room rather than inflating the Panel number, which is
-what you budget with:
-
-```yaml
-docker:
-  overhead:
-    override: true
-    default_multiplier: 1.25
-```
-
-Rule of thumb: leave at least 1.5 GB between your heap size and the kill
-threshold, and be aware that on macOS a pre-touched heap does **not** shrink
-back the way it appears to on Linux. The memory compressor reclaims cold pages
-only over hours, not minutes, so a freshly restarted server sits at its
-committed size for a long time.
-
-### CPU: enforced, off by default
-
-```yaml
-system:
-  enforce_cpu_limit: true
-```
-
-macOS has no scheduler quota, and the alternatives do not work: an unprivileged
-process can lower its own priority but not restore it, and the background QoS
-tier throttles I/O and timers while leaving compute alone -- a burner still sits
-at 99.7% of a core after `taskpolicy -b`. Stopping and continuing the process is
-what remains, and it caps accurately, within about 3% of target.
-
-The catch is that a throttled process is frozen in bursts, and for a game server
-those land inside its tick budget. So the limiter only ever throttles a server
-that is **over** its limit:
-
-- A server inside its allowance is **never signalled at all** -- not stopped,
-  not continued. It cannot tell the limiter exists.
-- Idle capacity stays usable. A cgroup quota would idle the CPU rather than lend
-  it out; here a server may use whatever is going spare until something else
-  wants it.
-- Decisions are made on usage smoothed over ~250ms, so a server is not throttled
-  for briefly spawning a helper process.
-- A single stall is bounded by the 20ms control window. Measured: a 40%-limited
-  runaway settles around 68%, and a 50%-limited one at 47% with 10ms stalls.
-
-It is off by default because on a machine running one server there is nothing to
-protect it from, and capping it can only make it slower. Turn it on when several
-servers share a machine and one of them misbehaving would ruin the others.
+---
 
 ## Per-server accounts
 
@@ -711,6 +553,121 @@ Requirements and limits worth being clear about:
   and can see their own traffic. What it buys is that a compromised server
   cannot pivot to the Panel, the node, or the rest of your network.
 
+## Resource limits
+
+### Watch out for `MaxRAMPercentage` in egg startup commands
+
+Several stock eggs, including Paper, start the JVM with something like
+`-Xms128M -XX:MaxRAMPercentage=95.0`. Inside a container that is exactly right:
+the JVM reads the cgroup limit and sizes its heap to 95% of what the server was
+given.
+
+There is no cgroup here, so the JVM reads the **whole machine** instead. On a
+16 GB Mac a server with a 4 GB limit will happily grow its heap toward 15 GB,
+sail past its limit, and be killed for it.
+
+Replace the percentage with an explicit ceiling that matches the Panel's memory
+limit, for example on a 4 GB server:
+
+```
+java -Xms1024M -Xmx3584M -jar {{SERVER_JARFILE}}
+```
+
+Leave headroom: `-Xmx` bounds the Java heap, not the whole process, and the JVM
+also needs metaspace, thread stacks and off-heap buffers on top.
+
+### Memory: enforced, with caveats
+
+Wings already samples every server's resident memory once a second for the
+Panel's graphs. When a server stays above its limit for five consecutive
+samples it is killed and reported to the Panel as an out-of-memory kill, which
+is the same thing the Panel shows when a cgroup kills a container.
+
+The threshold is the Panel's memory limit plus the same overhead allowance
+Docker applies, so both environments kill at the same number. The five-sample
+grace exists so that a JVM briefly touching its ceiling before a collection is
+not mistaken for a runaway.
+
+Two honest differences from a kernel limit:
+
+- **It is about a second late.** A cgroup refuses the allocation that would
+  cross the limit; this notices afterwards. A fast allocation burst can
+  overshoot in between, so this protects the machine from a server that leaks,
+  not from one that allocates several gigabytes instantly.
+- **It kills rather than refuses.** There is no way to make an allocation fail
+  from outside the process.
+
+Turn it off with:
+
+```yaml
+system:
+  enforce_memory_limit: false
+```
+
+A server with no configured limit is never killed for memory. Its ceiling is the
+machine, and it was allowed to use it.
+
+#### If you use `-XX:+AlwaysPreTouch`, the default 5% overhead is too tight
+
+The default allowance is the Panel's limit plus 5%, which assumes a process
+whose resident memory tracks what it is really using. A JVM started with
+`AlwaysPreTouch` commits its whole heap at startup instead, so an 8 GB heap
+shows roughly 9 GB resident from the first second and stays there. Against a
+10 GB Panel limit that is 84% of the kill threshold while the server is idle,
+and normal load pushes it over.
+
+The symptom is a server killed and reported as out of memory while its own
+metrics look fine, because the heap is nowhere near full. The heap is not the
+problem; metaspace, code cache, thread stacks, direct buffers and the collector's
+own structures all sit outside it.
+
+Give the non-heap overhead room rather than inflating the Panel number, which is
+what you budget with:
+
+```yaml
+docker:
+  overhead:
+    override: true
+    default_multiplier: 1.25
+```
+
+Rule of thumb: leave at least 1.5 GB between your heap size and the kill
+threshold, and be aware that on macOS a pre-touched heap does **not** shrink
+back the way it appears to on Linux. The memory compressor reclaims cold pages
+only over hours, not minutes, so a freshly restarted server sits at its
+committed size for a long time.
+
+### CPU: enforced, off by default
+
+```yaml
+system:
+  enforce_cpu_limit: true
+```
+
+macOS has no scheduler quota, and the alternatives do not work: an unprivileged
+process can lower its own priority but not restore it, and the background QoS
+tier throttles I/O and timers while leaving compute alone -- a burner still sits
+at 99.7% of a core after `taskpolicy -b`. Stopping and continuing the process is
+what remains, and it caps accurately, within about 3% of target.
+
+The catch is that a throttled process is frozen in bursts, and for a game server
+those land inside its tick budget. So the limiter only ever throttles a server
+that is **over** its limit:
+
+- A server inside its allowance is **never signalled at all** -- not stopped,
+  not continued. It cannot tell the limiter exists.
+- Idle capacity stays usable. A cgroup quota would idle the CPU rather than lend
+  it out; here a server may use whatever is going spare until something else
+  wants it.
+- Decisions are made on usage smoothed over ~250ms, so a server is not throttled
+  for briefly spawning a helper process.
+- A single stall is bounded by the 20ms control window. Measured: a 40%-limited
+  runaway settles around 68%, and a 50%-limited one at 47% with 10ms stalls.
+
+It is off by default because on a machine running one server there is nothing to
+protect it from, and capping it can only make it slower. Turn it on when several
+servers share a machine and one of them misbehaving would ruin the others.
+
 ## Troubleshooting
 
 ### "An error occurred on the remote host ... (code: 404)" when creating a server
@@ -810,7 +767,7 @@ Running as root *by accident* also means your game servers run as root, which is
 a worse position than upstream Pterodactyl puts you in, where the container
 contains a compromised plugin.
 
-Note that this is different from [turning on isolation](#turning-on-isolation),
+Note that this is different from [turning on isolation](#isolation),
 which runs wings as root deliberately. There, root is what lets wings create the
 per-server accounts and load the firewall rules, and each server then drops to
 an account of its own, so the servers end up **less** privileged, not more. The
@@ -849,6 +806,23 @@ quickest way to tell whether a rule is the cause.
 If isolation is **off**, it is macOS Local Network permission rather than
 networking. See below.
 
+## Where to look when something breaks
+
+Everything is a plain file. Assuming the paths above:
+
+| what | where |
+| --- | --- |
+| wings' own log | `~/pterodactyl/logs/wings.stderr.log` (or the terminal) |
+| a server's console | `~/pterodactyl/native/<server-uuid>/console.log` |
+| a server's install log | `~/pterodactyl/logs/install/<server-uuid>.log` |
+| the server's files | `~/pterodactyl/volumes/<server-uuid>/` |
+| what wings is running as | `ps aux \| grep "[w]ings"` |
+
+If those paths do not exist, wings is using different ones, so check
+`root_directory` in your `config.yml`. If they exist but you get "no such file"
+or empty globs, wings is running as root and your shell cannot see into them;
+that is a sign to go back to step 3.
+
 ## macOS gotcha: Local Network permission
 
 If your servers cannot reach anything on your LAN, such as a database on another
@@ -860,6 +834,92 @@ has no UI, so it can never trigger the permission prompt. It just fails. Grant
 it under **System Settings → Privacy & Security → Local Network**. Apple-signed
 binaries and processes running as root are unaffected, which is what makes this
 so confusing to diagnose.
+
+## Why this exists
+
+macOS cannot run Linux containers. Every "Docker for Mac" runtime (Docker
+Desktop, Colima, OrbStack, Rancher) boots a Linux VM to do it, and Apple's own
+`container` framework runs a micro-VM per container and requires Apple silicon.
+So "run Pterodactyl on a Mac" has always meant "run a Linux VM on a Mac."
+
+This fork replaces Wings' container layer with host processes, so a Mac can be a
+Pterodactyl node with no VM involved.
+
+## What works
+
+- Full Panel integration: console, file manager, SFTP, power actions, and live
+  CPU / memory / disk graphs
+- Servers **survive a Wings restart**. stdin is a FIFO, stdout is a log file,
+  and the process gets its own session, so a later Wings adopts it by pid
+- Backups, transfers and the egg install flow
+- Linux is unaffected: the Docker environment is untouched and still the default
+  there
+
+## What is different or missing
+
+| | upstream | this fork |
+| --- | --- | --- |
+| filesystem isolation | mount namespace per server | unix accounts + kernel sandbox, opt-in |
+| network isolation | network namespace per server | pf rules keyed on uid, opt-in |
+| process isolation | PID namespace per server | none, servers can see each other's processes |
+| memory limit | enforced by the kernel | enforced by supervision, ~1s latency |
+| CPU limit | enforced via cgroups | enforced by supervision, opt-in |
+| egg install | runs in the installer image | runs on the host (see below) |
+| server user | dedicated `pterodactyl` user | the user running Wings, or an account per server when isolation is on |
+
+Egg install scripts hardcode `/mnt/server` and `/mnt/install`. There is nothing
+to mount those onto, and macOS's sealed root filesystem means `/mnt` cannot even
+be created, so the script text is rewritten to point at the real directories.
+This works for essentially every real egg, but a script that assembles a path at
+runtime (`cd /mnt/${dir}`) will not be caught and will fail.
+
+They also assume the installer image's toolbox. `curl`, `tar` and `unzip` are on
+macOS already; `jq` and `wget` are not, and plenty of eggs need them, so the
+installer adds both. Anything the *startup* command invokes, such as `java`, `node`
+or `python`, you must install yourself, since no image supplies it.
+
+## Is it actually faster than a VM?
+
+Mostly no. The win is memory, not speed.
+
+These are measured on one machine, a 2019 Intel MacBook Pro with 16 GB running a
+Paper 26.2 server and 43 plugins, comparing the same server before and after
+it was moved off a Lima VM (8 vCPU, 12 GiB, `vz`) onto the host.
+
+| | VM | native |
+| --- | --- | --- |
+| server startup | 39.7s (n=16) | ~38.6s |
+| cold read, 130 MB / 244 files | 257 ms | 220 ms |
+| memory reserved | 12 GiB | what the server uses (5.5 GB) |
+| LAN round trip | ~0.4 ms | ~0.4 ms |
+
+**Startup time does not improve.** Apple's Virtualization.framework is
+hardware-accelerated, so CPU-bound JVM work already ran at close to native
+speed. Sixteen boots from the VM era averaged 39.7s; the quietest native boot
+was 38.6s. That is a wash, and it is the honest answer to "will my server run
+faster": it will not, noticeably.
+
+**Disk I/O improves by around 14%**, which is the virtio-blk and disk-image
+layers going away. Worth having for a Minecraft server, which does a lot of
+small random reads, but not transformative.
+
+Beware of measuring this badly: dropping caches *inside* the guest does not
+evict the disk image from the *host's* page cache, so the VM's "cold" read is
+served from host RAM and looks about twice as fast as native. Both layers have
+to be purged for the comparison to mean anything.
+
+**Memory is the real difference.** A VM reserves what you give it whether the
+workload needs it or not. 12 GiB of a 16 GiB machine was committed to running a
+process that fits in 5.5 GB. Getting that back is the reason to do this, and on
+a machine with plenty of RAM to spare the case is much weaker.
+
+**Networking is unchanged** if the VM was already bridged. Lima's default
+userspace port forwarding costs real latency, roughly 31 ms as observed here
+before bridging, but `socket_vmnet` removes that without leaving the VM.
+
+The operational difference does not show up in a benchmark: the VM is another
+thing that has to be running. Backups on this node silently stopped for two
+days because the VM was powered off, not because anything failed.
 
 ## Notes for anyone porting Wings elsewhere
 
