@@ -45,6 +45,10 @@ func newTestEnvironmentAt(t *testing.T, root, startup string, stop remote.Proces
 			Environment:   "native",
 			Timezone:      "UTC",
 			Username:      "pterodactyl",
+			// A bare struct literal skips the `default:"true"` tag that
+			// creasty/defaults applies when a real config file is loaded, so
+			// set it explicitly to match production.
+			EnforceMemoryLimit: true,
 		},
 	})
 
@@ -411,6 +415,66 @@ func TestNativeEnvironment_RunsUnderDedicatedAccount(t *testing.T) {
 	if b, err := os.ReadFile(filepath.Join(dir, "peeked.txt")); err == nil && len(strings.TrimSpace(string(b))) > 0 {
 		t.Fatalf("server read a neighbouring server's file: %q", b)
 	}
+}
+
+// Memory limits are enforced by supervision rather than by the kernel, so the
+// enforcement logic itself is worth testing directly: it decides whether a
+// server lives or dies.
+func TestNativeEnvironment_MemoryLimitDecision(t *testing.T) {
+	e := newTestEnvironment(t, `while :; do sleep 1; done`, remote.ProcessStopConfiguration{})
+
+	const limit = 128 * 1024 * 1024
+
+	t.Run("under the limit resets the counter", func(t *testing.T) {
+		if got := e.checkMemoryLimit(limit-1, limit, 3); got != 0 {
+			t.Fatalf("a sample back under the limit must reset the count, got %d", got)
+		}
+	})
+
+	t.Run("at exactly the limit is not over", func(t *testing.T) {
+		if got := e.checkMemoryLimit(limit, limit, 0); got != 0 {
+			t.Fatalf("using exactly the limit is allowed, got %d", got)
+		}
+	})
+
+	t.Run("over the limit accumulates", func(t *testing.T) {
+		if got := e.checkMemoryLimit(limit+1, limit, 2); got != 3 {
+			t.Fatalf("expected the count to advance to 3, got %d", got)
+		}
+	})
+
+	t.Run("a single spike does not reach the threshold", func(t *testing.T) {
+		if got := e.checkMemoryLimit(limit*2, limit, 0); got >= memoryGraceSamples {
+			t.Fatalf("one over-limit sample should not be enough to kill, got %d", got)
+		}
+	})
+
+	t.Run("a server with no configured limit is never killed", func(t *testing.T) {
+		unlimited := newTestEnvironment(t, `while :; do sleep 1; done`, remote.ProcessStopConfiguration{})
+		unlimited.Configuration.SetSettings(environment.Settings{
+			Mounts: unlimited.Configuration.Mounts(),
+			Limits: environment.Limits{MemoryLimit: 0},
+		})
+		// memoryLimit falls back to total RAM here; exceeding that is not a
+		// reason to kill, since the server was never given a budget.
+		if got := unlimited.checkMemoryLimit(1<<62, unlimited.memoryLimit(), 4); got != 0 {
+			t.Fatalf("an unlimited server must never accumulate over-limit samples, got %d", got)
+		}
+	})
+
+	t.Run("disabling enforcement stops it entirely", func(t *testing.T) {
+		cfg := config.Get()
+		cfg.System.EnforceMemoryLimit = false
+		config.Set(cfg)
+		t.Cleanup(func() {
+			c := config.Get()
+			c.System.EnforceMemoryLimit = true
+			config.Set(c)
+		})
+		if got := e.checkMemoryLimit(limit*10, limit, 4); got != 0 {
+			t.Fatalf("enforcement is off, nothing should accumulate, got %d", got)
+		}
+	})
 }
 
 func TestNativeEnvironment_StatsReflectRealUsage(t *testing.T) {

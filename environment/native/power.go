@@ -81,6 +81,12 @@ func (e *Environment) Start(ctx context.Context) error {
 	e.SetState(environment.ProcessStartingState)
 	sawError = true
 
+	// A fresh process has not been OOM killed; clear the flag from any previous
+	// run so the Panel does not attribute an old kill to this one.
+	e.mu.Lock()
+	e.oomKilled = false
+	e.mu.Unlock()
+
 	if err := e.OnBeforeStart(ctx); err != nil {
 		return errors.WrapIf(err, "environment/native: failed to run pre-boot process")
 	}

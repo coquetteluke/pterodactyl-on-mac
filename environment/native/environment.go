@@ -90,6 +90,11 @@ type Environment struct {
 	// exitCode of the last process to terminate.
 	exitCode uint32
 
+	// oomKilled records that wings itself killed the last process for staying
+	// above its memory limit, so that the Panel shows the same cause it would
+	// for a container the kernel killed.
+	oomKilled bool
+
 	// wait is closed when the running process is reaped, letting WaitForStop
 	// block without polling.
 	wait chan struct{}
@@ -278,16 +283,16 @@ func (e *Environment) writePidFile(pid int) error {
 }
 
 // ExitState returns the exit code of the last process to run, and whether it
-// was killed by the system for running out of memory.
+// was killed for running out of memory.
 //
-// The second value is always false: macOS has no OOM killer in the Linux
-// sense. A JVM that exhausts its heap exits on its own with a non-zero status
-// and is reported as an ordinary crash.
+// darwin has no OOM killer in the Linux sense, so the second value reports
+// whether wings killed the server itself after watching it stay above its
+// memory limit. See killForMemory.
 func (e *Environment) ExitState() (uint32, bool, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	return e.exitCode, false, nil
+	return e.exitCode, e.oomKilled, nil
 }
 
 // InSituUpdate applies changed resource limits to a running server.

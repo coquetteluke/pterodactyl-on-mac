@@ -25,10 +25,12 @@ of Pterodactyl's security model rests on that. This fork has no containers, so:
   `config.yml` which contains the node token that authenticates to your Panel.
   This one is fixable — see [per-server accounts](#per-server-accounts) — but
   the two below are not.
-- **Resource limits are advisory only.** macOS has no cgroups. The memory and
-  CPU values from the Panel are reported back for display but nothing enforces
-  them. For a JVM server, the `-Xmx` flag in the startup command is the real
-  ceiling. A server *can* consume all host memory.
+- **CPU limits are not enforced at all**, and memory limits are enforced by
+  supervision rather than by the kernel. macOS has no cgroups. Wings watches
+  memory and kills a server that stays over its limit (see
+  [resource limits](#resource-limits)), but that is a second or so slower than a
+  kernel kill, and nothing whatsoever bounds CPU. One server can still starve
+  every other server on the machine.
 - **There is no network isolation.** Servers bind host ports directly.
 
 If you are renting servers to other people, use upstream Wings on Linux. This
@@ -62,7 +64,8 @@ Pterodactyl node with no VM involved.
 | | upstream | this fork |
 | --- | --- | --- |
 | isolation | container per server | none — plain processes |
-| memory / CPU limits | enforced via cgroups | reported only, not enforced |
+| memory limit | enforced by the kernel | enforced by supervision, ~1s latency |
+| CPU limit | enforced via cgroups | not enforced |
 | egg install | runs in the installer image | runs on the host (see below) |
 | server user | dedicated `pterodactyl` user | the user running Wings |
 
@@ -133,6 +136,47 @@ config keeps its current behaviour with no change.
 
 Pick a data directory your user can write to. `/var/lib/pterodactyl`, the
 upstream default, needs root.
+
+## Resource limits
+
+### Memory — enforced, with caveats
+
+Wings already samples every server's resident memory once a second for the
+Panel's graphs. When a server stays above its limit for five consecutive
+samples it is killed and reported to the Panel as an out-of-memory kill, which
+is the same thing the Panel shows when a cgroup kills a container.
+
+The threshold is the Panel's memory limit plus the same overhead allowance
+Docker applies, so both environments kill at the same number. The five-sample
+grace exists so that a JVM briefly touching its ceiling before a collection is
+not mistaken for a runaway.
+
+Two honest differences from a kernel limit:
+
+- **It is about a second late.** A cgroup refuses the allocation that would
+  cross the limit; this notices afterwards. A fast allocation burst can
+  overshoot in between, so this protects the machine from a server that leaks,
+  not from one that allocates several gigabytes instantly.
+- **It kills rather than refuses.** There is no way to make an allocation fail
+  from outside the process.
+
+Turn it off with:
+
+```yaml
+system:
+  enforce_memory_limit: false
+```
+
+A server with no configured limit is never killed for memory — its ceiling is
+the machine, and it was allowed to use it.
+
+### CPU — not enforced
+
+There is no scheduler quota to attach a process to on macOS. The only mechanism
+that would genuinely cap CPU is duty-cycling the process with SIGSTOP/SIGCONT,
+which for a game server means visible stalls for connected players. That is a
+worse outcome than the problem, so it is deliberately not implemented. The
+Panel's CPU limit is displayed and ignored.
 
 ## Per-server accounts
 

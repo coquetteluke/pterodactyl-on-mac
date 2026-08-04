@@ -263,6 +263,19 @@ type SystemConfiguration struct {
 
 	OpenatMode string `default:"auto" yaml:"openat_mode"`
 
+	// EnforceMemoryLimit makes the native environment terminate a server that
+	// stays above its memory limit, reporting it to the Panel as an
+	// out-of-memory kill.
+	//
+	// Docker gets this from the kernel: the cgroup kills the container the
+	// instant it exceeds its limit. There is no cgroup on darwin, so wings
+	// enforces it by watching the resource samples it already collects and
+	// acting on them. That is a second or so slower than a kernel kill and a
+	// determined allocation burst can overshoot in between, but it is the
+	// difference between a limit that means something and a number displayed
+	// for decoration.
+	EnforceMemoryLimit bool `default:"true" yaml:"enforce_memory_limit"`
+
 	// Environment selects how server processes are executed.
 	//
 	//   docker - run each server in a container (the upstream behaviour)

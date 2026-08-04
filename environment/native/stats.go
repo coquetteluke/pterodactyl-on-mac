@@ -7,6 +7,7 @@ import (
 
 	"emperror.dev/errors"
 
+	"github.com/pterodactyl/wings/config"
 	"github.com/pterodactyl/wings/environment"
 )
 
@@ -32,6 +33,10 @@ func (e *Environment) pollResources(ctx context.Context) error {
 	var (
 		lastCPU  uint64
 		lastTime time.Time
+		// over counts consecutive samples above the memory limit. Acting on a
+		// single sample would kill a server for a momentary spike, which the
+		// allocator may hand straight back.
+		over int
 	)
 
 	for {
@@ -80,16 +85,64 @@ func (e *Environment) pollResources(ctx context.Context) error {
 			uptime = 0
 		}
 
+		limit := e.memoryLimit()
 		e.Events().Publish(environment.ResourceEvent, environment.Stats{
 			Uptime:      uptime,
 			Memory:      resident,
-			MemoryLimit: e.memoryLimit(),
+			MemoryLimit: limit,
 			CpuAbsolute: cpuAbsolute,
 			// Per-process network accounting is not available on darwin
 			// without a packet filter or a privileged helper, so these stay at
 			// zero rather than reporting a number that is not true.
 			Network: environment.NetworkStats{},
 		})
+
+		if over = e.checkMemoryLimit(resident, limit, over); over >= memoryGraceSamples {
+			e.killForMemory(resident, limit)
+			return nil
+		}
+	}
+}
+
+// memoryGraceSamples is how many consecutive over-limit samples are required
+// before a server is killed. At the one-second poll interval this rides out
+// brief spikes -- a JVM briefly touching its ceiling before a collection, for
+// instance -- while still reacting within a few seconds to a server that is
+// genuinely running away.
+const memoryGraceSamples = 5
+
+// checkMemoryLimit returns the updated count of consecutive over-limit samples.
+func (e *Environment) checkMemoryLimit(resident, limit uint64, over int) int {
+	if !config.Get().System.EnforceMemoryLimit {
+		return 0
+	}
+	// A server with no configured limit is bounded only by the machine, and
+	// memoryLimit reports total RAM for it; killing at that point would be
+	// killing for using the memory it was allowed.
+	if e.Configuration.Limits().MemoryLimit <= 0 || limit == 0 {
+		return 0
+	}
+	if resident <= limit {
+		return 0
+	}
+	return over + 1
+}
+
+// killForMemory terminates a server that has stayed above its memory limit and
+// records it as an out-of-memory kill, which is what the Panel shows for a
+// container the kernel killed for the same reason.
+func (e *Environment) killForMemory(resident, limit uint64) {
+	e.log().
+		WithField("memory_bytes", resident).
+		WithField("memory_limit_bytes", limit).
+		Warn("server exceeded its memory limit; terminating")
+
+	e.mu.Lock()
+	e.oomKilled = true
+	e.mu.Unlock()
+
+	if err := e.Terminate(context.Background(), "SIGKILL"); err != nil {
+		e.log().WithField("error", err).Error("failed to terminate server that exceeded its memory limit")
 	}
 }
 
@@ -121,12 +174,13 @@ func (e *Environment) sampleGroup(pid int) (resident uint64, cpuNS uint64, err e
 	return resident, cpuNS, nil
 }
 
-// memoryLimit reports the memory ceiling shown in the Panel.
+// memoryLimit reports the memory ceiling for this server, including the same
+// overhead allowance Docker applies to a container so that the two environments
+// kill at the same threshold.
 //
-// Nothing enforces it. macOS has no cgroups, so this is the number the Panel
-// configured, echoed back for display; for a JVM the -Xmx flag in the startup
-// command is what actually bounds the heap. An unlimited server reports the
-// machine's total memory, which is the real ceiling in that case.
+// A server with no configured limit reports the machine's total memory, which
+// is its real ceiling; enforcement skips those rather than killing a server for
+// using memory it was allowed.
 func (e *Environment) memoryLimit() uint64 {
 	if l := e.Configuration.Limits().BoundedMemoryLimit(); l > 0 {
 		return uint64(l)
