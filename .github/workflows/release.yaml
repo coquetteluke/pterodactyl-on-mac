@@ -92,11 +92,17 @@ jobs:
 
           ## Before you deploy it
 
-          This fork has no containers, so it also has none of the isolation
-          containers provide. By default every server runs as the same user and can
-          read every other server's files, and CPU limits are not enforced at all.
-          **Do not use this for shared or multi-tenant hosting.** See the README for
-          what can and cannot be mitigated.
+          This fork has no containers, so none of the isolation containers provide
+          comes for free. Out of the box every server runs as the same user, can read
+          every other server's files, can reach your Panel and the rest of your LAN,
+          and is not CPU limited.
+
+          Per-server accounts, pf-based network isolation and a CPU limiter are all
+          available as opt-ins, and all need Wings running as root. Even with every
+          one of them on, this is weaker than a container: there is no equivalent of
+          a PID namespace or a disk quota. **Do not use this for shared or
+          multi-tenant hosting.** See the README for what can and cannot be
+          mitigated.
           NOTES
           sed -i '' "s|__REPO__|${GITHUB_REPOSITORY}|g" /tmp/notes.md
 

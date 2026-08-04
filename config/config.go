@@ -182,6 +182,30 @@ type SystemConfiguration struct {
 		PerServer bool `yaml:"per_server" default:"false"`
 	} `yaml:"user"`
 
+	// NetworkIsolation confines what each server can reach on the network.
+	//
+	// A container gets its own network namespace, so reaching the host or a
+	// sibling requires routing the daemon never configures. macOS has no
+	// namespaces, so without this every server shares the host's stack and can
+	// open a connection to the Panel, to Wings' own API, or to anything else on
+	// the LAN. Rules are enforced by pf and keyed on the uid owning the socket,
+	// so this requires per_server accounts and Wings running as root.
+	NetworkIsolation struct {
+		// Enabled turns the policy on. Wings refuses to start with this set
+		// while per_server is not, rather than loading rules that cannot tell
+		// one server from another.
+		Enabled bool `yaml:"enabled" default:"false"`
+
+		// AllowOut lists addresses and CIDR blocks that servers may reach even
+		// though they fall inside an otherwise blocked private range. A server
+		// whose plugins talk to a database on the LAN needs that address here.
+		//
+		// Hostnames are rejected: pf resolves a name once when the rules load,
+		// so a rule written against one silently stops matching when the
+		// address behind it changes.
+		AllowOut []string `yaml:"allow_out"`
+	} `yaml:"network_isolation"`
+
 	// Passwd controls the mounting of a generated passwd files into containers started by Wings.
 	Passwd struct {
 		// Enable controls whether generated passwd files should be mounted into containers.

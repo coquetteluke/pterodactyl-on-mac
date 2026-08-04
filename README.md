@@ -63,7 +63,8 @@ Pterodactyl node with no VM involved.
 
 | | upstream | this fork |
 | --- | --- | --- |
-| isolation | container per server | none, just plain processes |
+| filesystem isolation | container per server | unix accounts per server, opt-in |
+| network isolation | network namespace per server | pf rules keyed on uid, opt-in |
 | memory limit | enforced by the kernel | enforced by supervision, ~1s latency |
 | CPU limit | enforced via cgroups | enforced by supervision, opt-in |
 | egg install | runs in the installer image | runs on the host (see below) |
@@ -450,6 +451,69 @@ Two things worth knowing:
 - Existing servers are chowned on their next boot, so their files stop being
   readable by the account you normally log in as. Use SFTP or the Panel's file
   manager rather than editing them directly over ssh.
+
+## Network isolation
+
+Per-server accounts stop a server reading another server's *files*. They do
+nothing about the network. A container gets its own network namespace, so
+reaching the host or a sibling needs routing the daemon never sets up. macOS has
+no namespaces, so by default every server shares the host's network stack and
+can open a connection to anything the Mac can reach: the Panel, Wings' own API
+on loopback, your router's admin page, a NAS, another server's RCON port.
+
+macOS does ship pf, and pf can match rules on the **uid that owns the socket**.
+Combined with per-server accounts that gives a real per-server policy, enforced
+in the kernel.
+
+```yaml
+system:
+  network_isolation:
+    enabled: true
+    allow_out:
+      - 192.168.4.40      # a database on the LAN that plugins need
+```
+
+pf only evaluates an anchor the main ruleset references, and macOS's stock
+`/etc/pf.conf` references only Apple's own. Add these two lines to the end of
+it, or Wings will load rules that sit there enforcing nothing:
+
+```
+anchor "wings"
+load anchor "wings" from "/etc/pf.anchors/com.pterodactyl.wings"
+```
+
+Wings checks for this on startup and refuses rather than pretending the policy
+is live.
+
+What each server ends up with:
+
+| Destination | Allowed |
+| --- | --- |
+| Its own allocated ports, inbound | yes |
+| DNS, outbound | yes |
+| The public internet, e.g. session servers, plugin downloads | yes |
+| Anything in `allow_out` | yes |
+| Loopback, so Wings' API and any local database | **no** |
+| RFC1918 and CGNAT, so the Panel, your LAN, other machines | **no** |
+| Link-local and IPv6 ULA | **no** |
+
+The exceptions in `allow_out` are evaluated before the private-range blocks, so
+listing an address there genuinely reinstates it.
+
+Requirements and limits worth being clear about:
+
+- It needs `per_server: true`. Rules key on uid, so without dedicated accounts
+  every server looks identical to pf. Wings refuses the combination rather than
+  loading a policy that cannot tell servers apart.
+- It needs **root**, same as per-server accounts, since only root loads pf rules.
+- `allow_out` takes addresses and CIDR blocks, not hostnames. pf resolves a name
+  once when rules load, so a hostname silently stops matching when the address
+  behind it moves, which for a security control is worse than refusing it.
+- Wings takes a reference-counted claim on pf (`pfctl -E`), so it will not
+  disable pf out from under Internet Sharing or a VPN that also uses it.
+- **This is still not a network namespace.** Servers share the host's addresses
+  and can see their own traffic. What it buys is that a compromised server
+  cannot pivot to the Panel, the node, or the rest of your network.
 
 ## Troubleshooting
 

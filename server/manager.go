@@ -294,6 +294,13 @@ func (m *Manager) init(ctx context.Context) error {
 	diff := time.Now().Sub(start)
 	log.WithField("duration", fmt.Sprintf("%s", diff)).Info("finished processing server configurations")
 
+	// Load the firewall policy before anything is allowed to boot. Applying it
+	// afterwards would leave a window in which an adopted server is running
+	// unconfined, which for a security control is the same as not having it.
+	if err := m.ApplyNetworkIsolation(); err != nil {
+		return errors.WrapIf(err, "server: failed to apply network isolation")
+	}
+
 	return nil
 }
 
