@@ -73,9 +73,12 @@ Egg install scripts hardcode `/mnt/server` and `/mnt/install`. There is nothing
 to mount those onto, and macOS's sealed root filesystem means `/mnt` cannot even
 be created, so the script text is rewritten to point at the real directories.
 This works for essentially every real egg, but a script that assembles a path at
-runtime (`cd /mnt/${dir}`) will not be caught and will fail. Whatever the startup
-command invokes — `java`, `node`, `python` — must exist on the host's `PATH`; no
-image supplies it.
+runtime (`cd /mnt/${dir}`) will not be caught and will fail.
+
+They also assume the installer image's toolbox. `curl`, `tar` and `unzip` are on
+macOS already; `jq` and `wget` are not, and plenty of eggs need them, so the
+installer adds both. Anything the *startup* command invokes — `java`, `node`,
+`python` — you must install yourself, since no image supplies it.
 
 ## Install
 
@@ -396,6 +399,25 @@ time a node is saved, which is why `ignore_panel_config_updates: true` is
 recommended — without it, saving the node in the UI silently rewrites your
 config back to a port the daemon cannot bind, and it stops coming back after a
 restart.
+
+### A new server exits with code 1 immediately and prints nothing
+
+The install script did not produce a jar, so there is nothing to run. Check the
+install log at `<data-dir>/logs/install/<server-uuid>.log`.
+
+The usual cause is a missing command-line tool. Egg install scripts are written
+for the Alpine and Debian installer images, where `jq` and `wget` are a given;
+macOS ships neither. The Paper script in particular pipes `curl` through `jq` to
+build its download URL, so without `jq` the URL is empty, `curl` writes nothing,
+the install appears to succeed, and the server exits 1 on boot with no output.
+
+```bash
+brew install jq wget
+```
+
+Then hit **Reinstall Server** in the Panel. The installer does this for you on a
+fresh install; you only need it by hand if you set wings up before this was
+added, or installed the binary manually.
 
 ### Servers get killed shortly after starting
 

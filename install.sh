@@ -183,6 +183,30 @@ PLISTEOF
   info "Wrote ${plist}"
 }
 
+# ensure_egg_tools installs the command-line tools that egg install scripts
+# assume are present.
+#
+# Those scripts are written for the Alpine and Debian installer images, where a
+# working jq and wget are a given. macOS ships neither. The failure is
+# particularly unhelpful: the Paper script pipes curl through jq to build its
+# download URL, so without jq the URL comes out empty, curl writes nothing, the
+# install "succeeds", and the server then exits 1 on boot with no output at all
+# because there is no jar to run.
+ensure_egg_tools() {
+  local missing=()
+  command -v jq   >/dev/null 2>&1 || missing+=(jq)
+  command -v wget >/dev/null 2>&1 || missing+=(wget)
+  [ ${#missing[@]} -eq 0 ] && return 0
+
+  if command -v brew >/dev/null 2>&1; then
+    info "Installing tools that egg install scripts need: ${missing[*]}"
+    brew install "${missing[@]}" >/dev/null 2>&1 || warn "could not install: ${missing[*]}"
+  else
+    warn "missing ${missing[*]}; most egg install scripts need them. Install Homebrew, then: brew install ${missing[*]}"
+  fi
+  return 0
+}
+
 # ---------------------------------------------------------------------------
 # Panel
 # ---------------------------------------------------------------------------
@@ -388,6 +412,7 @@ if [ "$MODE" = full ]; then
   install_panel
 fi
 
+ensure_egg_tools
 install_wings
 [ "$LAUNCHAGENT" = 1 ] && write_wings_launchagent
 
