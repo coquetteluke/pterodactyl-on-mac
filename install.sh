@@ -103,6 +103,8 @@ main() {
 MODE=""
 LAUNCHAGENT=""
 ISOLATE=""
+ACTION=""
+PURGE=0
 ASSUME_YES=0
 for arg in "$@"; do
   case "$arg" in
@@ -111,6 +113,10 @@ for arg in "$@"; do
     --launchagent) LAUNCHAGENT=1 ;;
     --isolate) ISOLATE=1 ;;
     --no-isolate) ISOLATE=0 ;;
+    --turn-isolation-on) ACTION=isolate ;;
+    --turn-isolation-off) ACTION=revert ;;
+    --uninstall) ACTION=uninstall ;;
+    --purge) ACTION=uninstall; PURGE=1 ;;
     -y|--yes) ASSUME_YES=1 ;;
     -h|--help)
       # Printed inline rather than read back out of $0: when this script is
@@ -137,6 +143,13 @@ below instead if you are scripting it.
     --isolate       an account, a sandbox and firewall rules per server (default)
     --no-isolate    skip that, and run every server as one unprivileged user
     -y, --yes       take the defaults, ask nothing
+
+  On a machine that already has a node, this same command also manages it:
+
+    --turn-isolation-on    turn isolation on for an existing install
+    --turn-isolation-off   turn it back off, handing the server files back
+    --uninstall            remove wings, keeping your server data
+    --purge                remove wings and the server data too
 
 This fork removes the container boundary that upstream Wings relies on for
 isolation. It is for single-tenant machines only. See
@@ -166,6 +179,35 @@ run
 # Every question has a default that is applied when there is no terminal, so the
 # same script works piped from curl, run by hand, and from a script.
 interview() {
+  # On a machine that already has a node, "install this" is rarely what is
+  # wanted; managing what is there is. Asking that first saves someone hunting
+  # for a second script to run.
+  if [ -z "$ACTION" ]; then
+    if wings_installed && have_tty; then
+      printf '\n'
+      ACTION=$(ask_choice "This Mac already has a node on it. What do you want to do?" install \
+        "install:Reinstall or update it" \
+        "isolate:Turn isolation on" \
+        "revert:Turn isolation off" \
+        "uninstall:Remove it")
+    else
+      ACTION=install
+    fi
+  fi
+
+  case "$ACTION" in
+    isolate)
+      exec sudo "$(fetch_helper isolate.sh pterodactyl-isolate)"
+      ;;
+    revert)
+      exec sudo "$(fetch_helper isolate.sh pterodactyl-isolate)" --revert
+      ;;
+    uninstall)
+      local u; u=$(fetch_helper uninstall.sh pterodactyl-uninstall)
+      if [ "$PURGE" = 1 ]; then exec "$u" --purge; else exec "$u"; fi
+      ;;
+  esac
+
   if [ -z "$MODE" ]; then
     if have_tty; then printf '\n'; fi
     MODE=$(ask_choice "What should this Mac do?" node \
@@ -526,18 +568,33 @@ CREDS
 
 # ---------------------------------------------------------------------------
 
-# install_isolate_script puts isolate.sh alongside wings.
+# fetch_helper installs one of the companion scripts next to wings.
 #
-# It is kept as a separate command rather than folded in here because it is
-# needed again later: in node mode config.yml does not exist until the node has
-# been created in the Panel, and isolation has to be written into that file.
-install_isolate_script() {
-  local dest="${PREFIX}/pterodactyl-isolate"
-  info "Installing ${dest}"
-  curl -fsSL "https://raw.githubusercontent.com/${REPO}/main/isolate.sh" -o "${dest}.tmp" \
-    || die "could not download isolate.sh"
+# They stay separate files rather than being folded in here because each is
+# needed again after the install is over: isolation has to be written into a
+# config.yml that does not exist until the node has been created in the Panel,
+# and uninstalling obviously happens later. This script is the only URL anyone
+# has to know; it fetches the others as they are needed.
+fetch_helper() {  # source name, installed name
+  local src=$1 dest="${PREFIX}/$2"
+  mkdir -p "$PREFIX"
+  curl -fsSL "https://raw.githubusercontent.com/${REPO}/main/${src}" -o "${dest}.tmp" \
+    || die "could not download ${src}"
   chmod 755 "${dest}.tmp"
   mv "${dest}.tmp" "$dest"
+  echo "$dest"
+}
+
+install_isolate_script() {
+  local dest
+  dest=$(fetch_helper isolate.sh pterodactyl-isolate)
+  info "Installing ${dest}"
+}
+
+# wings_installed reports whether this machine already has a node on it, which
+# decides whether the first question is "what do you want" or "what now".
+wings_installed() {
+  [ -x "${PREFIX}/wings" ] || [ -f "${DATA_DIR}/config.yml" ]
 }
 
 # setup_isolation turns on everything that stands in for a container.

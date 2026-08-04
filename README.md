@@ -23,8 +23,13 @@ You get, by default:
   network. This is on unless you turn it off.
 - **Wings starting automatically** when the Mac boots.
 
-Add `--full` if you want the Panel on this Mac too, rather than running it from
-a Pi or another machine. Add `--yes` to skip the questions entirely.
+The first question is whether this Mac should just run game servers for a Panel
+elsewhere, or run the Panel too. Add `--full` or `--node` to answer it up front,
+or `--yes` to skip the questions entirely.
+
+**That one command is the only one you need.** Run it again later on a machine
+that already has a node and it asks what to do instead: reinstall, turn
+isolation on or off, or remove it.
 
 ## ⚠️ Before you deploy it
 
@@ -184,8 +189,10 @@ Use `wings_darwin_amd64` on an Intel Mac.
 
 ### Uninstalling
 
+Run the same install command and pick **Remove it**, or go straight there:
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/coquetteluke/pterodactyl-on-mac/main/uninstall.sh | bash
+curl -fsSL https://raw.githubusercontent.com/coquetteluke/pterodactyl-on-mac/main/install.sh | bash -s -- --uninstall
 ```
 
 This stops any running servers, removes the wings binary and its LaunchAgent,
