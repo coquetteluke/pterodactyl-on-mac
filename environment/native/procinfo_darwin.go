@@ -3,6 +3,7 @@
 package native
 
 import (
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -33,6 +34,9 @@ const (
 )
 
 // taskInfo mirrors struct proc_taskinfo.
+//
+// The CPU fields are converted to nanoseconds by pidTaskInfo before being
+// returned; the kernel reports them in mach absolute time units.
 type taskInfo struct {
 	VirtualSize   uint64
 	ResidentSize  uint64
@@ -70,7 +74,41 @@ func pidTaskInfo(pid int) (*taskInfo, error) {
 	if errno != 0 {
 		return nil, errno
 	}
+	ti.TotalUser = machToNanos(ti.TotalUser)
+	ti.TotalSystem = machToNanos(ti.TotalSystem)
 	return &ti, nil
+}
+
+var (
+	timebaseOnce sync.Once
+	timebaseHz   uint64
+)
+
+// machToNanos converts mach absolute time units to nanoseconds.
+//
+// The kernel reports task CPU time in mach ticks, not nanoseconds. On Intel
+// Macs one tick happens to be exactly one nanosecond, which hides the bug; on
+// Apple silicon the timebase is 24MHz, so treating ticks as nanoseconds
+// under-reports CPU usage by a factor of ~41.7.
+//
+// hw.tbfrequency is the tick rate in Hz and is the sysctl equivalent of
+// mach_timebase_info, which is only reachable through cgo.
+func machToNanos(ticks uint64) uint64 {
+	timebaseOnce.Do(func() {
+		hz, err := unix.SysctlUint64("hw.tbfrequency")
+		if err != nil || hz == 0 {
+			// Fall back to treating ticks as nanoseconds, which is correct on
+			// Intel and no worse than the alternative elsewhere.
+			hz = 1e9
+		}
+		timebaseHz = hz
+	})
+	if timebaseHz == 1e9 {
+		return ticks
+	}
+	// Split the conversion so that a long-running process cannot overflow:
+	// ticks*1e9 alone exceeds uint64 after roughly an hour at 24MHz.
+	return (ticks/timebaseHz)*1e9 + ((ticks%timebaseHz)*1e9)/timebaseHz
 }
 
 // pidStartTime returns the wall-clock time at which a process was started.
