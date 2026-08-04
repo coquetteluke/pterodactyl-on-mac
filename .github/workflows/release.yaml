@@ -81,6 +81,27 @@ jobs:
           Add `-s -- --launchagent` to either one to also install a LaunchAgent so
           wings starts at login.
 
+          ## Isolation
+
+          Add `--isolate` to either command to set up everything that stands in for
+          a container: an account per server, the kernel filesystem sandbox, and
+          per-server firewall rules.
+
+          ```
+          curl -fsSL https://raw.githubusercontent.com/__REPO__/main/install.sh | bash -s -- --full --isolate
+          ```
+
+          Wings then runs as root, which it needs to create the accounts and load
+          the firewall rules; the servers themselves end up less privileged than
+          before. If your Panel is on another machine, `config.yml` does not exist
+          until you have created the node, so run it afterwards instead:
+
+          ```
+          sudo ~/.local/bin/pterodactyl-isolate
+          ```
+
+          `sudo ~/.local/bin/pterodactyl-isolate --revert` undoes all of it.
+
           ## Or install by hand
 
           Download the binary for your Mac below, `arm64` for Apple silicon or
