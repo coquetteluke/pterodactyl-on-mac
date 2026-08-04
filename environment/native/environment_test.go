@@ -15,6 +15,8 @@ import (
 	"github.com/pterodactyl/wings/config"
 	"github.com/pterodactyl/wings/environment"
 	"github.com/pterodactyl/wings/remote"
+
+	"golang.org/x/sys/unix"
 )
 
 // newTestEnvironment builds a native environment whose "server" is a shell loop
@@ -236,6 +238,74 @@ func parseInt(s string) (int, error) {
 		return 0, os.ErrInvalid
 	}
 	return n, nil
+}
+
+// A server that wings re-attaches to on boot must still be watched, otherwise
+// its death goes unnoticed and the Panel shows a dead server as running
+// forever. wings does not call Start() on that path, so the watch has to be
+// established by Attach() too.
+func TestNativeEnvironment_AdoptedServerExitIsNoticed(t *testing.T) {
+	e := newTestEnvironment(t, `while :; do sleep 1; done`, remote.ProcessStopConfiguration{
+		Type:  remote.ProcessStopSignal,
+		Value: "SIGKILL",
+	})
+
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitFor(t, "process to be running", func() bool {
+		ok, _ := e.IsRunning(context.Background())
+		return ok
+	})
+	pid := e.currentPid()
+	if pid <= 0 {
+		t.Fatal("expected a live pid")
+	}
+
+	// Stand up a second environment over the same on-disk state and attach to
+	// it, which is exactly what a restarted wings does. Nothing calls Start().
+	e2, err := New(e.Id, &Metadata{}, e.Configuration)
+	if err != nil {
+		t.Fatalf("second environment: %v", err)
+	}
+	if err := e2.Attach(context.Background()); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	e2.SetState(environment.ProcessRunningState)
+
+	if err := unix.Kill(pid, unix.SIGKILL); err != nil {
+		t.Fatalf("kill: %v", err)
+	}
+
+	waitFor(t, "the adopted process's death to be noticed", func() bool {
+		return e2.State() == environment.ProcessOfflineState
+	})
+
+	if running, _ := e2.IsRunning(context.Background()); running {
+		t.Fatal("IsRunning still reports true after the process died")
+	}
+}
+
+// A recycled pid must not be mistaken for the server. The pid file records the
+// process start time precisely so that a stale entry cannot resurrect a dead
+// server.
+func TestNativeEnvironment_StalePidIsNotTrusted(t *testing.T) {
+	e := newTestEnvironment(t, `while :; do sleep 1; done`, remote.ProcessStopConfiguration{})
+	if err := e.Create(); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// pid 1 is alive and always will be, but it is not our server, and its
+	// start time will not match the bogus value recorded here.
+	if err := os.WriteFile(e.pidPath(), []byte("1 123456789\n"), 0o600); err != nil {
+		t.Fatalf("write pid file: %v", err)
+	}
+	if got := e.readPidFile(); got != 0 {
+		t.Fatalf("expected a mismatched start time to invalidate the pid, got %d", got)
+	}
+	if running, _ := e.IsRunning(context.Background()); running {
+		t.Fatal("a recycled pid should not be reported as the server running")
+	}
 }
 
 func TestNativeEnvironment_StatsReflectRealUsage(t *testing.T) {

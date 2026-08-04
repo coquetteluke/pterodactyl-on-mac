@@ -220,20 +220,52 @@ func (e *Environment) currentPid() int {
 	return e.readPidFile()
 }
 
+// readPidFile returns the recorded pid, but only if it still refers to the same
+// process wings started.
+//
+// A bare pid is not enough. Pids are recycled, so a stale file can point at
+// something else entirely, and wings would then report a long-dead server as
+// running and refuse to boot it. The file therefore also records the process
+// start time, which the kernel supplies and which no recycled pid can match.
 func (e *Environment) readPidFile() int {
 	b, err := os.ReadFile(e.pidPath())
 	if err != nil {
 		return 0
 	}
-	var pid int
-	if _, err := fmt.Sscanf(string(b), "%d", &pid); err != nil {
+	var (
+		pid     int
+		startNS int64
+	)
+	// Older files hold just a pid; accept them rather than orphaning a running
+	// server across an upgrade, but they get no reuse protection.
+	n, _ := fmt.Sscanf(string(b), "%d %d", &pid, &startNS)
+	if n < 1 || pid <= 0 {
+		return 0
+	}
+	if n < 2 {
+		return pid
+	}
+
+	started, err := pidStartTime(pid)
+	if err != nil {
+		return 0
+	}
+	if started.UnixNano() != startNS {
+		// The pid has been recycled; whatever holds it now is not our server.
 		return 0
 	}
 	return pid
 }
 
+// writePidFile records the pid alongside the process start time, so a later
+// wings can tell our server apart from an unrelated process that happens to
+// have inherited the same pid. See readPidFile.
 func (e *Environment) writePidFile(pid int) error {
-	return os.WriteFile(e.pidPath(), []byte(fmt.Sprintf("%d\n", pid)), 0o600)
+	var startNS int64
+	if started, err := pidStartTime(pid); err == nil {
+		startNS = started.UnixNano()
+	}
+	return os.WriteFile(e.pidPath(), []byte(fmt.Sprintf("%d %d\n", pid, startNS)), 0o600)
 }
 
 // ExitState returns the exit code of the last process to run, and whether it

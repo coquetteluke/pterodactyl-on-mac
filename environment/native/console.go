@@ -132,6 +132,17 @@ func (e *Environment) Attach(ctx context.Context) error {
 	e.cancelAttach = cancel
 	e.mu.Unlock()
 
+	// Make sure something is watching for the process to exit.
+	//
+	// Start() sets up that watch for servers it launches, but wings does not go
+	// through Start() when it boots and finds a server already running -- it
+	// re-attaches instead. Without this, such a server has nothing monitoring
+	// it, and the environment would keep reporting it as running long after it
+	// had died. adopt() is a no-op if a watch already exists.
+	if pid := e.currentPid(); processIsAlive(pid) {
+		e.adopt(pid)
+	}
+
 	go func() {
 		defer func() {
 			e.mu.Lock()
