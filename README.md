@@ -70,20 +70,58 @@ runtime (`cd /mnt/${dir}`) will not be caught and will fail. Whatever the startu
 command invokes — `java`, `node`, `python` — must exist on the host's `PATH`; no
 image supplies it.
 
-## Requirements
+## Install
 
-- macOS (developed and run on macOS 26, Intel; the code is not
-  architecture-specific)
-- Go 1.24+ to build
-- Whatever runtime your servers need, installed on the host
+```bash
+curl -fsSL https://raw.githubusercontent.com/coquetteluke/wings-darwin/main/install.sh | bash
+```
 
-## Build
+That picks the right binary for your Mac (Apple silicon or Intel), verifies it
+against the published `SHA256SUMS`, installs it to `~/.local/bin/wings`, creates
+the data directories, and prints the configuration you still need to do. Add
+`-s -- --launchagent` to also install a LaunchAgent that keeps it running.
+
+If piping a script into your shell makes you uneasy — reasonable — read it
+first, or just grab the binary yourself from the
+[releases page](https://github.com/coquetteluke/wings-darwin/releases):
+
+```bash
+curl -fsSLO https://github.com/coquetteluke/wings-darwin/releases/latest/download/wings_darwin_arm64
+curl -fsSL  https://github.com/coquetteluke/wings-darwin/releases/latest/download/SHA256SUMS | shasum -a 256 -c --ignore-missing
+chmod +x wings_darwin_arm64 && mv wings_darwin_arm64 ~/.local/bin/wings
+```
+
+Use `wings_darwin_amd64` on an Intel Mac.
+
+### Building from source
+
+Requires Go 1.24+ and whatever runtime your servers need on the host.
 
 ```bash
 go build -o wings .
 ```
 
 Cross-compiling from another platform works too: `GOOS=darwin go build .`
+
+### After installing
+
+Wings still needs a `config.yml` from your Panel (Admin → Nodes → your node →
+Configuration). Three settings matter for this fork:
+
+```yaml
+system:
+  environment: native        # run servers as host processes
+  root_directory: /Users/you/pterodactyl
+  data: /Users/you/pterodactyl/volumes
+api:
+  port: 8443                 # an unprivileged process cannot bind 443
+ignore_panel_config_updates: true
+```
+
+That last line stops the Panel pushing `api.port = daemonListen` back down and
+breaking the daemon the next time you save the node. If you would rather keep
+the Panel in charge, change the node's Daemon Port instead, or put a reverse
+proxy in front of a high port.
 
 ## Configure
 
