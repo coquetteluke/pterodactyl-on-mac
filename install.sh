@@ -390,7 +390,7 @@ PLIST
   launchctl bootstrap "gui/${uid}" "${agents}/com.pterodactyl.panel.schedule.plist" 2>/dev/null || true
 
   cat > "${PANEL_DIR}/CREDENTIALS.txt" <<CREDS
-Pterodactyl Panel — generated $(date)
+Pterodactyl Panel, generated $(date)
 
   URL:            ${url}
   Admin login:    admin@$(hostname -s).local

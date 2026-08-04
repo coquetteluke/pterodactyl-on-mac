@@ -56,16 +56,16 @@ jobs:
 
           ## Which one do I want?
 
-          **Just this Mac as a node.** You already have a Panel somewhere else — a
-          Raspberry Pi, another machine on your network, a VPS — and you want this
-          Mac to run game servers for it. This installs only the daemon.
+          **Just this Mac as a node.** You already have a Panel somewhere else, on a
+          Raspberry Pi or another machine on your network, and you want this Mac to
+          run game servers for it. This installs only the daemon.
 
           ```
           curl -fsSL https://raw.githubusercontent.com/__REPO__/main/install.sh | bash
           ```
 
           Then create a node in your existing Panel and paste its config onto this
-          Mac. Set the node's **Daemon Port to 8443**, not 443 — an unprivileged
+          Mac. Set the node's **Daemon Port to 8443**, not 443, because an unprivileged
           process cannot bind a port below 1024.
 
           **Everything on one Mac.** You have no Panel yet and want the whole thing
@@ -83,8 +83,8 @@ jobs:
 
           ## Or install by hand
 
-          Download the binary for your Mac below — `arm64` for Apple silicon,
-          `amd64` for Intel — and check it against `SHA256SUMS`:
+          Download the binary for your Mac below, `arm64` for Apple silicon or
+          `amd64` for Intel, and check it against `SHA256SUMS`:
 
           ```
           shasum -a 256 -c SHA256SUMS --ignore-missing

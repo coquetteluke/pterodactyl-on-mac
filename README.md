@@ -23,8 +23,8 @@ of Pterodactyl's security model rests on that. This fork has no containers, so:
   Every server process runs as the same user, with that user's full filesystem
   access. One server can read and modify another server's files, and can read
   `config.yml` which contains the node token that authenticates to your Panel.
-  This one is fixable — see [per-server accounts](#per-server-accounts) — but
-  the two below are not.
+  This one is fixable; see [per-server accounts](#per-server-accounts). The two
+  below are not.
 - **Resource limits are enforced by supervision, not by the kernel.** macOS has
   no cgroups. Wings can hold a server to both its memory and CPU limits (see
   [resource limits](#resource-limits)), but it does so by watching and reacting,
@@ -34,7 +34,7 @@ of Pterodactyl's security model rests on that. This fork has no containers, so:
 - **There is no network isolation.** Servers bind host ports directly.
 
 If you are renting servers to other people, use upstream Wings on Linux. This
-fork is intended for a **single-tenant** machine — a homelab node where you own
+fork is intended for a **single-tenant** machine: a homelab node where you own
 every server on it.
 
 ---
@@ -63,7 +63,7 @@ Pterodactyl node with no VM involved.
 
 | | upstream | this fork |
 | --- | --- | --- |
-| isolation | container per server | none — plain processes |
+| isolation | container per server | none, just plain processes |
 | memory limit | enforced by the kernel | enforced by supervision, ~1s latency |
 | CPU limit | enforced via cgroups | enforced by supervision, opt-in |
 | egg install | runs in the installer image | runs on the host (see below) |
@@ -77,8 +77,8 @@ runtime (`cd /mnt/${dir}`) will not be caught and will fail.
 
 They also assume the installer image's toolbox. `curl`, `tar` and `unzip` are on
 macOS already; `jq` and `wget` are not, and plenty of eggs need them, so the
-installer adds both. Anything the *startup* command invokes — `java`, `node`,
-`python` — you must install yourself, since no image supplies it.
+installer adds both. Anything the *startup* command invokes, such as `java`, `node`
+or `python`, you must install yourself, since no image supplies it.
 
 ## Install
 
@@ -86,9 +86,9 @@ There are two ways to run this, depending on where your Panel lives.
 
 ### This Mac as a node, Panel elsewhere
 
-The common case: you already have a Panel — on a Raspberry Pi, another machine
-on your network, anywhere it can reach this Mac — and you want this Mac to run
-game servers for it.
+The common case: you already have a Panel somewhere else, on a Raspberry Pi or
+another machine on your network, and you want this Mac to run game servers for
+it.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/coquetteluke/pterodactyl-on-mac/main/install.sh | bash
@@ -100,8 +100,8 @@ the data directories, and prints the configuration you still need to do. Add
 `-s -- --launchagent` to also install a LaunchAgent that keeps it running.
 
 You then create the node in your existing Panel and paste its config here. Set
-the node's **Daemon Port to 8443**, not 443 — an unprivileged process cannot
-bind a port below 1024.
+the node's **Daemon Port to 8443**, not 443, because an unprivileged process
+cannot bind a port below 1024.
 
 ### Everything on one Mac
 
@@ -128,10 +128,10 @@ of which will otherwise waste your afternoon:
   welcome page on 8080 and that block is parsed first, so it would win as the
   default server for the port and the Panel would silently never be reached.
 
-Creating the node itself is still a few clicks in the UI — the Panel has no
-command for it — and the installer prints exactly what to fill in.
+Creating the node itself is still a few clicks in the UI, since the Panel has no
+command for it. The installer prints exactly what to fill in.
 
-If piping a script into your shell makes you uneasy — reasonable — read it
+If piping a script into your shell makes you uneasy, which is fair, read it
 first, or just grab the binary yourself from the
 [releases page](https://github.com/coquetteluke/pterodactyl-on-mac/releases):
 
@@ -150,7 +150,7 @@ curl -fsSL https://raw.githubusercontent.com/coquetteluke/pterodactyl-on-mac/mai
 ```
 
 This stops any running servers, removes the wings binary and its LaunchAgent,
-and **leaves all of your data alone** — server files, worlds and the Panel
+and **leaves all of your data alone**. Server files, worlds and the Panel
 database all stay, and it prints where they are so you can decide.
 
 Stopping the servers first matters: they run detached so they survive a wings
@@ -227,7 +227,7 @@ because something here behaves differently from a Linux install.
 Not 443. An unprivileged process cannot bind a port below 1024, and using 443
 is what pushes people into running wings as root.
 
-**3. Save the config — and fix its paths.** Copy the YAML from the node's
+**3. Save the config, then fix its paths.** Copy the YAML from the node's
 Configuration tab to `~/pterodactyl/config.yml`, then change the directories.
 The Panel generates Linux defaults, which on macOS live under a root-owned
 `/var`:
@@ -255,7 +255,7 @@ brew install --cask temurin@25     # or whatever your game needs
 brew install jq wget               # the installer does this for you
 ```
 
-`/usr/bin/java` existing means nothing — that is Apple's stub, which prints
+`/usr/bin/java` existing means nothing. That is Apple's stub, which prints
 "Unable to locate a Java Runtime" and exits 1. Check with `java -version`.
 
 **5. Start wings in the foreground** the first time, so you can read errors:
@@ -286,7 +286,7 @@ Everything is a plain file. Assuming the paths above:
 | the server's files | `~/pterodactyl/volumes/<server-uuid>/` |
 | what wings is running as | `ps aux \| grep "[w]ings"` |
 
-If those paths do not exist, wings is using different ones — check
+If those paths do not exist, wings is using different ones, so check
 `root_directory` in your `config.yml`. If they exist but you get "no such file"
 or empty globs, wings is running as root and your shell cannot see into them;
 that is a sign to go back to step 3.
@@ -295,8 +295,8 @@ that is a sign to go back to step 3.
 
 Mostly no. The win is memory, not speed.
 
-These are measured on one machine — a 2019 Intel MacBook Pro, 16 GB, running a
-Paper 26.2 server with 43 plugins — comparing the same server before and after
+These are measured on one machine, a 2019 Intel MacBook Pro with 16 GB running a
+Paper 26.2 server and 43 plugins, comparing the same server before and after
 it was moved off a Lima VM (8 vCPU, 12 GiB, `vz`) onto the host.
 
 | | VM | native |
@@ -310,7 +310,7 @@ it was moved off a Lima VM (8 vCPU, 12 GiB, `vz`) onto the host.
 hardware-accelerated, so CPU-bound JVM work already ran at close to native
 speed. Sixteen boots from the VM era averaged 39.7s; the quietest native boot
 was 38.6s. That is a wash, and it is the honest answer to "will my server run
-faster" — it will not, noticeably.
+faster": it will not, noticeably.
 
 **Disk I/O improves by around 14%**, which is the virtio-blk and disk-image
 layers going away. Worth having for a Minecraft server, which does a lot of
@@ -327,8 +327,8 @@ process that fits in 5.5 GB. Getting that back is the reason to do this, and on
 a machine with plenty of RAM to spare the case is much weaker.
 
 **Networking is unchanged** if the VM was already bridged. Lima's default
-userspace port forwarding costs real latency — roughly 31 ms was observed here
-before bridging — but `socket_vmnet` removes that without leaving the VM.
+userspace port forwarding costs real latency, roughly 31 ms as observed here
+before bridging, but `socket_vmnet` removes that without leaving the VM.
 
 The operational difference does not show up in a benchmark: the VM is another
 thing that has to be running. Backups on this node silently stopped for two
@@ -357,7 +357,7 @@ java -Xms1024M -Xmx3584M -jar {{SERVER_JARFILE}}
 Leave headroom: `-Xmx` bounds the Java heap, not the whole process, and the JVM
 also needs metaspace, thread stacks and off-heap buffers on top.
 
-### Memory — enforced, with caveats
+### Memory: enforced, with caveats
 
 Wings already samples every server's resident memory once a second for the
 Panel's graphs. When a server stays above its limit for five consecutive
@@ -385,10 +385,10 @@ system:
   enforce_memory_limit: false
 ```
 
-A server with no configured limit is never killed for memory — its ceiling is
-the machine, and it was allowed to use it.
+A server with no configured limit is never killed for memory. Its ceiling is the
+machine, and it was allowed to use it.
 
-### CPU — enforced, off by default
+### CPU: enforced, off by default
 
 ```yaml
 system:
@@ -439,7 +439,7 @@ longer read another server's files, or `config.yml` with your node token.
 
 It requires **Wings to run as root**, since only root may change a process's
 user, so it needs a LaunchDaemon rather than a LaunchAgent. Servers themselves
-still run unprivileged — more so than before, in fact.
+still run unprivileged, more so than before in fact.
 
 Two things worth knowing:
 
@@ -457,7 +457,7 @@ Two things worth knowing:
 
 The Panel reached *an* HTTP server and got a 404, so something answered but it
 was not wings. Nearly always the node's **Daemon Port** is pointing at the
-wrong thing — commonly at the Panel's own nginx if you installed both on one
+wrong thing, commonly at the Panel's own nginx if you installed both on one
 machine.
 
 Check what is actually listening, from the machine running the Panel:
@@ -473,7 +473,7 @@ is not running at all.
 
 Then, in Admin → Nodes → your node → Settings:
 
-- **Daemon Port: 8443.** Not 443 — an unprivileged process cannot bind it — and
+- **Daemon Port: 8443.** Not 443, which an unprivileged process cannot bind, and
   not the Panel's port.
 - **SSL: off**, unless you have put a TLS terminator in front of wings
   yourself. wings ships no certificate, so with SSL on the Panel tries HTTPS
@@ -503,7 +503,7 @@ Start it in the foreground the first time so you can read the errors:
 If `api.port` in `config.yml` disagrees with the node's Daemon Port, the Panel
 is knocking on the wrong door. The Panel pushes `api.port = daemonListen` every
 time a node is saved, which is why `ignore_panel_config_updates: true` is
-recommended — without it, saving the node in the UI silently rewrites your
+recommended. Without it, saving the node in the UI silently rewrites your
 config back to a port the daemon cannot bind, and it stops coming back after a
 restart.
 
@@ -534,8 +534,8 @@ JVM is sizing its heap off the whole machine rather than the server's limit.
 
 ### wings only starts with sudo, and my files are all root-owned
 
-Your `config.yml` still has the Panel's Linux defaults — `/var/lib/pterodactyl`
-— which needs root on macOS. Point it at your home directory instead of
+Your `config.yml` still has the Panel's Linux defaults, `/var/lib/pterodactyl`,
+which needs root on macOS. Point it at your home directory instead of
 escalating; see step 3 of the walkthrough. To undo it:
 
 ```bash
@@ -547,7 +547,7 @@ sudo chown -R "$USER":staff ~/pterodactyl
 ```
 
 Running as root also means your game servers run as root, which is a worse
-position than upstream Pterodactyl puts you in — there, the container contains
+position than upstream Pterodactyl puts you in, where the container contains
 a compromised plugin.
 
 ### The "accept the EULA" dialog never appears
@@ -558,35 +558,35 @@ the server's output is not reaching the Panel, the dialog cannot fire, and
 neither can the Java-version or PID-limit prompts.
 
 Fixed in v1.13.2-mac.7: the console tail was being torn down the instant the
-process exited, discarding anything written in the previous 50ms — which for a
+process exited, discarding anything written in the previous 50ms, which for a
 server that fails immediately is all of it. Update, or accept it manually by
 setting `eula=true` in `eula.txt` through the Panel's file manager.
 
 ### Servers cannot reach a database on another machine
 
-That is macOS Local Network permission, not networking — see below.
+That is macOS Local Network permission, not networking. See below.
 
 ## macOS gotcha: Local Network permission
 
-If your servers cannot reach anything on your LAN — a database on another
-machine, say — and you get `EHOSTUNREACH` / `NoRouteToHostException` while the
+If your servers cannot reach anything on your LAN, such as a database on another
+machine, and you get `EHOSTUNREACH` / `NoRouteToHostException` while the
 same connection works fine from your shell, this is **not** a networking problem.
 
 macOS 15+ requires Local Network permission, and a process started by `launchd`
-has no UI, so it can never trigger the permission prompt — it just fails. Grant
+has no UI, so it can never trigger the permission prompt. It just fails. Grant
 it under **System Settings → Privacy & Security → Local Network**. Apple-signed
 binaries and processes running as root are unaffected, which is what makes this
 so confusing to diagnose.
 
 ## Notes for anyone porting Wings elsewhere
 
-The Docker code was not the hard part — the Docker SDK is a pure-Go HTTP client
+The Docker code was not the hard part. The Docker SDK is a pure-Go HTTP client
 and cross-compiles to darwin untouched. The work was in `internal/ufs`, the
 sandboxed filesystem layer, whose files are tagged `//go:build unix` but use
 Linux-only syscalls:
 
 - **`/proc/self/fd/N` does not exist on macOS.** Wings uses it to confirm where a
-  descriptor actually landed after opening a multi-component path — `O_NOFOLLOW`
+  descriptor actually landed after opening a multi-component path, since `O_NOFOLLOW`
   only guards the final component, so an intermediate symlink could otherwise
   escape the sandbox. The macOS equivalent is `fcntl(F_GETPATH)`.
 - `F_GETPATH` returns **firmlink-resolved** paths, so a base directory under
@@ -596,7 +596,7 @@ Linux-only syscalls:
   pre-5.6-kernel `openat` path that validates in userspace. `NewUnixFS` clamps
   the request so a caller asking for openat2 cannot get a filesystem where every
   operation returns `ENOSYS`.
-- Don't reach for `x/sys/unix.Getdirentries` on darwin — it emulates `getdents`
+- Don't reach for `x/sys/unix.Getdirentries` on darwin. It emulates `getdents`
   by re-opening the directory and skipping N entries per call, which is O(n²).
   Use `fdopendir` (via `os.File.ReadDir`).
 
@@ -612,13 +612,13 @@ go test ./...
 ```
 
 The full upstream suite passes on macOS, including the sandbox escape tests on
-the `openat` fallback path. The Linux build and test suite are unaffected —
+the `openat` fallback path. The Linux build and test suite are unaffected, and
 please keep it that way in any PR.
 
 ## Support
 
 Provided as-is, with no support and no guarantee of tracking upstream releases.
-Bugs in this fork are **not** the Pterodactyl project's problem — please do not
+Bugs in this fork are **not** the Pterodactyl project's problem, so please do not
 open issues on their tracker for anything here.
 
 ## License
