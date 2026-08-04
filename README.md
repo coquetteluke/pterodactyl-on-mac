@@ -207,6 +207,90 @@ config keeps its current behaviour with no change.
 Pick a data directory your user can write to. `/var/lib/pterodactyl`, the
 upstream default, needs root.
 
+## Walkthrough: your first server
+
+The steps below are in the order that avoids the traps. Most of them exist
+because something here behaves differently from a Linux install.
+
+**1. Install wings** with one of the commands above.
+
+**2. Create the node in your Panel.** Admin → Nodes → Create Node.
+
+| field | value |
+| --- | --- |
+| FQDN | the Mac's IP or `.local` name, reachable *from the Panel* |
+| Communicate over SSL | **off**, unless you have set up TLS yourself |
+| Behind Proxy | off, unless there really is one |
+| Daemon Port | **8443** |
+| Daemon SFTP Port | 2022 |
+
+Not 443. An unprivileged process cannot bind a port below 1024, and using 443
+is what pushes people into running wings as root.
+
+**3. Save the config — and fix its paths.** Copy the YAML from the node's
+Configuration tab to `~/pterodactyl/config.yml`, then change the directories.
+The Panel generates Linux defaults, which on macOS live under a root-owned
+`/var`:
+
+```yaml
+system:
+  root_directory: /Users/you/pterodactyl      # NOT /var/lib/pterodactyl
+  data: /Users/you/pterodactyl/volumes
+  log_directory: /Users/you/pterodactyl/logs
+  environment: native
+api:
+  port: 8443
+ignore_panel_config_updates: true
+```
+
+If you skip this, wings fails with a permission error, `sudo` makes it go away,
+and you end up running every game server as root with root-owned files you
+cannot read. It is the single easiest way to get into a mess here.
+
+**4. Install what your servers actually run.** There is no container image to
+supply a runtime:
+
+```bash
+brew install --cask temurin@25     # or whatever your game needs
+brew install jq wget               # the installer does this for you
+```
+
+`/usr/bin/java` existing means nothing — that is Apple's stub, which prints
+"Unable to locate a Java Runtime" and exits 1. Check with `java -version`.
+
+**5. Start wings in the foreground** the first time, so you can read errors:
+
+```bash
+~/.local/bin/wings --config ~/pterodactyl/config.yml
+```
+
+The node should go green in the Panel. Then stop it and install the LaunchAgent
+if you want it to survive reboots.
+
+**6. Create the server** in the Panel as usual.
+
+**7. Check the startup command.** Stock eggs use
+`-XX:MaxRAMPercentage=95.0`, which sizes the heap off the whole machine when
+there is no container. Replace it with an explicit `-Xmx` under the server's
+memory limit.
+
+## Where to look when something breaks
+
+Everything is a plain file. Assuming the paths above:
+
+| what | where |
+| --- | --- |
+| wings' own log | `~/pterodactyl/logs/wings.stderr.log` (or the terminal) |
+| a server's console | `~/pterodactyl/native/<server-uuid>/console.log` |
+| a server's install log | `~/pterodactyl/logs/install/<server-uuid>.log` |
+| the server's files | `~/pterodactyl/volumes/<server-uuid>/` |
+| what wings is running as | `ps aux \| grep "[w]ings"` |
+
+If those paths do not exist, wings is using different ones — check
+`root_directory` in your `config.yml`. If they exist but you get "no such file"
+or empty globs, wings is running as root and your shell cannot see into them;
+that is a sign to go back to step 3.
+
 ## Is it actually faster than a VM?
 
 Mostly no. The win is memory, not speed.
@@ -424,6 +508,36 @@ added, or installed the binary manually.
 Check the startup command for `-XX:MaxRAMPercentage`; see
 [the note above](#watch-out-for-maxrampercentage-in-egg-startup-commands). The
 JVM is sizing its heap off the whole machine rather than the server's limit.
+
+### wings only starts with sudo, and my files are all root-owned
+
+Your `config.yml` still has the Panel's Linux defaults — `/var/lib/pterodactyl`
+— which needs root on macOS. Point it at your home directory instead of
+escalating; see step 3 of the walkthrough. To undo it:
+
+```bash
+sudo pkill -f 'bin/wings'
+sed -i '' "s|/var/lib/pterodactyl|$HOME/pterodactyl|g; s|/var/log/pterodactyl|$HOME/pterodactyl/logs|g" ~/pterodactyl/config.yml
+sudo cp -a /var/lib/pterodactyl/volumes/. ~/pterodactyl/volumes/ 2>/dev/null
+sudo chown -R "$USER":staff ~/pterodactyl
+~/.local/bin/wings --config ~/pterodactyl/config.yml
+```
+
+Running as root also means your game servers run as root, which is a worse
+position than upstream Pterodactyl puts you in — there, the container contains
+a compromised plugin.
+
+### The "accept the EULA" dialog never appears
+
+That dialog is driven entirely by the Panel matching the line "you need to
+agree to the eula in order to run the server" in the live console stream. If
+the server's output is not reaching the Panel, the dialog cannot fire, and
+neither can the Java-version or PID-limit prompts.
+
+Fixed in v1.13.2-mac.7: the console tail was being torn down the instant the
+process exited, discarding anything written in the previous 50ms — which for a
+server that fails immediately is all of it. Update, or accept it manually by
+setting `eula=true` in `eula.txt` through the Panel's file manager.
 
 ### Servers cannot reach a database on another machine
 
