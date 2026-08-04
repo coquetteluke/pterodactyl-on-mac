@@ -128,6 +128,12 @@ func NewInstallationProcess(s *Server, script *remote.InstallationScript) (*Inst
 		Server: s,
 	}
 
+	// A native install runs the script as a host process and never touches
+	// Docker, so do not require a reachable daemon just to get here.
+	if config.UseNativeEnvironment() {
+		return proc, nil
+	}
+
 	if c, err := environment.Docker(); err != nil {
 		return nil, err
 	} else {
@@ -209,6 +215,13 @@ func (ip *InstallationProcess) Run() error {
 
 	if err := ip.BeforeExecute(); err != nil {
 		return err
+	}
+
+	// Without containers the script is executed directly, and writes its own
+	// log as it goes, so there is no separate after-execute step to collect
+	// output from a container that is about to be deleted.
+	if config.UseNativeEnvironment() {
+		return ip.executeNative()
 	}
 
 	cID, err := ip.Execute()
@@ -321,6 +334,11 @@ func (ip *InstallationProcess) pullInstallationImage() error {
 func (ip *InstallationProcess) BeforeExecute() error {
 	if err := ip.writeScriptToDisk(); err != nil {
 		return errors.WithMessage(err, "failed to write installation script to disk")
+	}
+	// There is no image to pull and no container to clean up for a native
+	// install; executeNative rewrites the script it just wrote.
+	if config.UseNativeEnvironment() {
+		return nil
 	}
 	if err := ip.pullInstallationImage(); err != nil {
 		return errors.WithMessage(err, "failed to pull updated installation container image for server")

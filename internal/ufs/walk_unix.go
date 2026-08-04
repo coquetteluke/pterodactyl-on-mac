@@ -7,13 +7,10 @@
 package ufs
 
 import (
-	"bytes"
 	"fmt"
 	iofs "io/fs"
 	"os"
 	"path"
-	"reflect"
-	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
@@ -122,71 +119,6 @@ func ReadDirMap[T any](fs *UnixFS, path string, fn func(DirEntry) (T, error)) ([
 	return out, nil
 }
 
-// nameOffset is a compile time constant
-const nameOffset = int(unsafe.Offsetof(unix.Dirent{}.Name))
-
-func nameFromDirent(de *unix.Dirent) (name []byte) {
-	// Because this GOOS' syscall.Dirent does not provide a field that specifies
-	// the name length, this function must first calculate the max possible name
-	// length, and then search for the NULL byte.
-	ml := int(de.Reclen) - nameOffset
-
-	// Convert syscall.Dirent.Name, which is array of int8, to []byte, by
-	// overwriting Cap, Len, and Data slice header fields to the max possible
-	// name length computed above, and finding the terminating NULL byte.
-	//
-	// TODO: is there an alternative to the deprecated SliceHeader?
-	// SliceHeader was mainly deprecated due to it being misused for avoiding
-	// allocations when converting a byte slice to a string, ref;
-	// https://go.dev/issue/53003
-	sh := (*reflect.SliceHeader)(unsafe.Pointer(&name))
-	sh.Cap = ml
-	sh.Len = ml
-	sh.Data = uintptr(unsafe.Pointer(&de.Name[0]))
-
-	if index := bytes.IndexByte(name, 0); index >= 0 {
-		// Found NULL byte; set slice's cap and len accordingly.
-		sh.Cap = index
-		sh.Len = index
-		return
-	}
-
-	// NOTE: This branch is not expected, but included for defensive
-	// programming, and provides a hard stop on the name based on the structure
-	// field array size.
-	sh.Cap = len(de.Name)
-	sh.Len = sh.Cap
-	return
-}
-
-// modeTypeFromDirent converts a syscall defined constant, which is in purview
-// of OS, to a constant defined by Go, assumed by this project to be stable.
-//
-// When the syscall constant is not recognized, this function falls back to a
-// Stat on the file system.
-func (fs *UnixFS) modeTypeFromDirent(de *unix.Dirent, fd int, name string) (FileMode, error) {
-	switch de.Type {
-	case unix.DT_REG:
-		return 0, nil
-	case unix.DT_DIR:
-		return ModeDir, nil
-	case unix.DT_LNK:
-		return ModeSymlink, nil
-	case unix.DT_CHR:
-		return ModeDevice | ModeCharDevice, nil
-	case unix.DT_BLK:
-		return ModeDevice, nil
-	case unix.DT_FIFO:
-		return ModeNamedPipe, nil
-	case unix.DT_SOCK:
-		return ModeSocket, nil
-	default:
-		// If syscall returned unknown type (e.g., DT_UNKNOWN, DT_WHT), then
-		// resolve actual mode by reading file information.
-		return fs.modeType(fd, name)
-	}
-}
-
 // modeType returns the mode type of the file system entry identified by
 // osPathname by calling os.LStat function, to intentionally not follow symbolic
 // links.
@@ -210,60 +142,27 @@ func newScratchBuffer() []byte {
 	return make([]byte, minimumScratchBufferSize)
 }
 
-func (fs *UnixFS) readDir(fd int, name, relative string, b []byte) ([]DirEntry, error) {
-	scratchBuffer := b
-	if scratchBuffer == nil || len(scratchBuffer) < minimumScratchBufferSize {
-		scratchBuffer = newScratchBuffer()
+// readDir is defined per-GOOS: Linux reads the directory with raw getdents
+// calls, darwin goes through fdopendir. See walk_linux.go and walk_darwin.go.
+
+// newDirent builds a directory entry rooted at the still-open dirfd. Both
+// platform readDir implementations funnel through here so the resulting
+// entries resolve children via *at syscalls rather than by re-walking a path.
+func (fs *UnixFS) newDirent(fd int, name, relative, childName string, mt FileMode) *dirent {
+	var rel string
+	if relative == "." {
+		rel = name
+	} else {
+		rel = path.Join(relative, childName)
 	}
+	return &dirent{dirfd: fd, name: childName, path: rel, modeType: mt, fs: fs}
+}
 
-	var entries []DirEntry
-	var workBuffer []byte
-
-	var sde unix.Dirent
-	for {
-		if len(workBuffer) == 0 {
-			n, err := unix.Getdents(fd, scratchBuffer)
-			if err != nil {
-				if err == unix.EINTR {
-					continue
-				}
-				return nil, ensurePathError(err, "getdents", name)
-			}
-			if n <= 0 {
-				// end of directory: normal exit
-				return entries, nil
-			}
-			workBuffer = scratchBuffer[:n] // trim work buffer to number of bytes read
-		}
-
-		// "Go is like C, except that you just put `unsafe` all over the place".
-		copy((*[unsafe.Sizeof(unix.Dirent{})]byte)(unsafe.Pointer(&sde))[:], workBuffer)
-		workBuffer = workBuffer[sde.Reclen:] // advance buffer for next iteration through loop
-
-		if sde.Ino == 0 {
-			continue // inode set to 0 indicates an entry that was marked as deleted
-		}
-
-		nameSlice := nameFromDirent(&sde)
-		nameLength := len(nameSlice)
-
-		if nameLength == 0 || (nameSlice[0] == '.' && (nameLength == 1 || (nameLength == 2 && nameSlice[1] == '.'))) {
-			continue
-		}
-
-		childName := string(nameSlice)
-		mt, err := fs.modeTypeFromDirent(&sde, fd, childName)
-		if err != nil {
-			return nil, err
-		}
-		var rel string
-		if relative == "." {
-			rel = name
-		} else {
-			rel = path.Join(relative, childName)
-		}
-		entries = append(entries, &dirent{dirfd: fd, name: childName, path: rel, modeType: mt, fs: fs})
-	}
+// isDotOrDotDot reports whether the raw directory entry name is "." or "..",
+// both of which are skipped when building entries.
+func isDotOrDotDot(name []byte) bool {
+	n := len(name)
+	return n == 0 || (name[0] == '.' && (n == 1 || (n == 2 && name[1] == '.')))
 }
 
 // dirent stores the name and file system mode type of discovered file system

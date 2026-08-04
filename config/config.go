@@ -11,6 +11,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -22,7 +23,6 @@ import (
 	"github.com/apex/log"
 	"github.com/creasty/defaults"
 	"github.com/gbrlsnchs/jwt/v3"
-	"golang.org/x/sys/unix"
 	"gopkg.in/yaml.v2"
 
 	"github.com/pterodactyl/wings/system"
@@ -253,6 +253,33 @@ type SystemConfiguration struct {
 	Transfers Transfers `yaml:"transfers"`
 
 	OpenatMode string `default:"auto" yaml:"openat_mode"`
+
+	// Environment selects how server processes are executed.
+	//
+	//   docker - run each server in a container (the upstream behaviour)
+	//   native - run each server as an ordinary process on this host
+	//   auto   - docker where it is available, native on macOS
+	//
+	// "native" exists for macOS, which cannot run Linux containers at all.
+	// Note that it does not enforce the memory and CPU limits configured in
+	// the Panel, because the platform provides no cgroup equivalent.
+	Environment string `default:"auto" yaml:"environment"`
+}
+
+// UseNativeEnvironment reports whether servers should be run as plain host
+// processes rather than in Docker containers.
+func UseNativeEnvironment() bool {
+	switch Get().System.Environment {
+	case "native":
+		return true
+	case "docker":
+		return false
+	default:
+		// Docker on macOS always means a Linux VM, which is the thing the
+		// native environment exists to avoid, so default to native there and
+		// to Docker everywhere else.
+		return runtime.GOOS == "darwin"
+	}
 }
 
 type CrashDetection struct {
@@ -489,6 +516,22 @@ func WriteToDisk(c *Configuration) error {
 // This function IS NOT thread safe and should only be called in the main thread
 // when the application is booting.
 func EnsurePterodactylUser() error {
+	// A native environment has no containers, so there are no mount points
+	// whose ownership has to line up with a dedicated system user -- servers
+	// simply run as whoever runs wings. This is also the only workable
+	// behaviour on macOS, which has neither useradd nor /usr/lib/os-release.
+	if UseNativeEnvironment() {
+		u, err := user.Current()
+		if err != nil {
+			return err
+		}
+		log.WithField("username", u.Username).Info("native environment: running servers as the current user")
+		_config.System.Username = u.Username
+		_config.System.User.Uid = system.MustInt(u.Uid)
+		_config.System.User.Gid = system.MustInt(u.Gid)
+		return nil
+	}
+
 	sysName, err := getSystemName()
 	if err != nil {
 		return err
@@ -673,6 +716,14 @@ func ConfigureDirectories() error {
 		return err
 	}
 
+	// The passwd and machine-id directories exist only to be bind-mounted into
+	// containers. A native environment has no containers to mount them into,
+	// and their default location under /run does not exist on macOS -- where
+	// the root filesystem is sealed, so creating it would fail outright.
+	if UseNativeEnvironment() {
+		return nil
+	}
+
 	if _config.System.Passwd.Enable {
 		log.WithField("path", _config.System.Passwd.Directory).Debug("ensuring passwd directory exists")
 		if err := os.MkdirAll(_config.System.Passwd.Directory, 0o755); err != nil {
@@ -813,6 +864,14 @@ func UseOpenat2() bool {
 	}
 	defer openat2Set.Store(true)
 
+	// On platforms without an openat2 syscall the mode is not negotiable, no
+	// matter what the config asks for. Honoring an explicit `openat2` here
+	// would hand every path resolution to a stub that cannot work.
+	if !openat2Supported {
+		openat2.Store(false)
+		return false
+	}
+
 	c := Get()
 	openatMode := c.System.OpenatMode
 	switch openatMode {
@@ -823,15 +882,9 @@ func UseOpenat2() bool {
 		openat2.Store(false)
 		return false
 	default:
-		fd, err := unix.Openat2(unix.AT_FDCWD, "/", &unix.OpenHow{})
-		if err != nil {
-			log.WithError(err).Warn("error occurred while checking for openat2 support, falling back to openat")
-			openat2.Store(false)
-			return false
-		}
-		_ = unix.Close(fd)
-		openat2.Store(true)
-		return true
+		v := probeOpenat2()
+		openat2.Store(v)
+		return v
 	}
 }
 

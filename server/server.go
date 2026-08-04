@@ -262,7 +262,10 @@ func (s *Server) CreateEnvironment() error {
 	}
 
 	cfg := config.Get()
-	if cfg.System.MachineID.Enable {
+	// The machine-id file is only ever consumed by being bind-mounted into the
+	// server's container, so there is nothing to write it for in a native
+	// environment -- and its directory is not created there either.
+	if cfg.System.MachineID.Enable && !config.UseNativeEnvironment() {
 		// Hytale wants a machine-id in order to encrypt tokens for the server. So
 		// write a machine-id file for the server that contains the server's UUID
 		// without any dashes.

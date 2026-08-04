@@ -18,6 +18,7 @@ import (
 	"github.com/pterodactyl/wings/config"
 	"github.com/pterodactyl/wings/environment"
 	"github.com/pterodactyl/wings/environment/docker"
+	"github.com/pterodactyl/wings/environment/native"
 	"github.com/pterodactyl/wings/remote"
 	"github.com/pterodactyl/wings/server/filesystem"
 )
@@ -201,9 +202,6 @@ func (m *Manager) InitServer(data remote.ServerConfigurationResponse) (*Server, 
 		return nil, errors.WithStackIf(err)
 	}
 
-	// Right now we only support a Docker based environment, so I'm going to hard code
-	// this logic in. When we're ready to support other environment we'll need to make
-	// some modifications here, obviously.
 	settings := environment.Settings{
 		Mounts:      s.Mounts(),
 		Allocations: s.cfg.Allocations,
@@ -212,16 +210,24 @@ func (m *Manager) InitServer(data remote.ServerConfigurationResponse) (*Server, 
 	}
 
 	envCfg := environment.NewConfiguration(settings, s.GetEnvironmentVariables())
-	meta := docker.Metadata{
-		Image: s.Config().Container.Image,
-	}
 
-	if env, err := docker.New(s.ID(), &meta, envCfg); err != nil {
-		return nil, err
+	// Docker is the environment everywhere it can actually run containers. On
+	// macOS it cannot, so servers are run as host processes instead.
+	var env environment.ProcessEnvironment
+	if config.UseNativeEnvironment() {
+		env, err = native.New(s.ID(), &native.Metadata{
+			Image: s.Config().Container.Image,
+		}, envCfg)
 	} else {
-		s.Environment = env
-		s.StartEventListeners()
+		env, err = docker.New(s.ID(), &docker.Metadata{
+			Image: s.Config().Container.Image,
+		}, envCfg)
 	}
+	if err != nil {
+		return nil, err
+	}
+	s.Environment = env
+	s.StartEventListeners()
 
 	// If the server's data directory exists, force disk usage calculation.
 	if _, err := os.Stat(s.Filesystem().Path()); err == nil {

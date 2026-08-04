@@ -1,41 +1,167 @@
-[![Logo Image](https://cdn.pterodactyl.io/logos/new/pterodactyl_logo.png)](https://pterodactyl.io)
+# wings-darwin
 
-![Discord](https://img.shields.io/discord/122900397965705216?label=Discord&logo=Discord&logoColor=white)
-![GitHub Releases](https://img.shields.io/github/downloads/pterodactyl/wings/latest/total)
-[![Go Report Card](https://goreportcard.com/badge/github.com/pterodactyl/wings)](https://goreportcard.com/report/github.com/pterodactyl/wings)
+An **unofficial** fork of [Pterodactyl Wings](https://github.com/pterodactyl/wings)
+that runs game servers natively on macOS, as ordinary host processes instead of
+Docker containers.
 
-# Pterodactyl Wings
+Not affiliated with or endorsed by the Pterodactyl project. Forked from Wings
+**v1.13.1**.
 
-Wings is Pterodactyl's server control plane, built for the rapidly changing gaming industry and designed to be
-highly performant and secure. Wings provides an HTTP API allowing you to interface directly with running server
-instances, fetch server logs, generate backups, and control all aspects of the server lifecycle.
+---
 
-In addition, Wings ships with a built-in SFTP server allowing your system to remain free of Pterodactyl specific
-dependencies, and allowing users to authenticate with the same credentials they would normally use to access the Panel.
+## ⚠️ Read this before deploying it
 
-## Sponsors
+**This fork removes the container boundary. Do not use it for shared or
+multi-tenant hosting.**
 
-I would like to extend my sincere thanks to the following sponsors for helping fund Pterodactyl's development.
-[Interested in becoming a sponsor?](https://github.com/sponsors/pterodactyl)
+Upstream Wings runs every server in its own Docker container, and a great deal
+of Pterodactyl's security model rests on that. This fork has no containers, so:
 
-| Company                                                                           | About                                                                                                                                                                                                                                           |
-|-----------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| [**Aussie Server Hosts**](https://aussieserverhosts.com/)                         | No frills Australian Owned and operated High Performance Server hosting for some of the most demanding games serving Australia and New Zealand.                                                                                                 |
-| [**BisectHosting**](https://www.bisecthosting.com/)                               | BisectHosting provides Minecraft, Valheim and other server hosting services with the highest reliability and lightning fast support since 2012.                                                                                                 |
-| [**MineStrator**](https://minestrator.com/)                                       | Looking for the most highend French hosting company for your minecraft server? More than 24,000 members on our discord trust us. Give us a try!                                                                                                 |
-| [**HostEZ**](https://hostez.io)                                                   | US & EU Rust & Minecraft Hosting. DDoS Protected bare metal, VPS and colocation with low latency, high uptime and maximum availability. EZ!                                                                                                     |
-| [**Blueprint**](https://blueprint.zip/?utm_source=pterodactyl&utm_medium=sponsor) | Create and install Pterodactyl addons and themes with the growing Blueprint framework - the package-manager for Pterodactyl. Use multiple modifications at once without worrying about conflicts and make use of the large extension ecosystem. |
-| [**indifferent broccoli**](https://indifferentbroccoli.com/)                      | indifferent broccoli is a game server hosting and rental company. With us, you get top-notch computer power for your gaming sessions. We destroy lag, latency, and complexity--letting you focus on the fun stuff.                              |
+- **Servers are not isolated from each other or from the host.** Every server
+  process runs as the same user, with that user's full filesystem access. One
+  server can read and modify another server's files, and can read `config.yml` —
+  which contains the node token that authenticates to your Panel.
+- **Resource limits are advisory only.** macOS has no cgroups. The memory and
+  CPU values from the Panel are reported back for display but nothing enforces
+  them. For a JVM server, the `-Xmx` flag in the startup command is the real
+  ceiling. A server *can* consume all host memory.
+- **There is no network isolation.** Servers bind host ports directly.
 
-## Documentation
+If you are renting servers to other people, use upstream Wings on Linux. This
+fork is intended for a **single-tenant** machine — a homelab node where you own
+every server on it.
 
-* [Panel Documentation](https://pterodactyl.io/panel/1.0/getting_started.html)
-* [Wings Documentation](https://pterodactyl.io/wings/1.0/installing.html)
-* [Community Guides](https://pterodactyl.io/community/about.html)
-* Or, get additional help [via Discord](https://discord.gg/pterodactyl)
+---
 
-## Reporting Issues
+## Why this exists
 
-Please use the [pterodactyl/panel](https://github.com/pterodactyl/panel) repository to report any issues or make
-feature requests for Wings. In addition, the [security policy](https://github.com/pterodactyl/panel/security/policy) listed
-within that repository also applies to Wings.
+macOS cannot run Linux containers. Every "Docker for Mac" runtime — Docker
+Desktop, Colima, OrbStack, Rancher — boots a Linux VM to do it, and Apple's own
+`container` framework runs a micro-VM per container and requires Apple silicon.
+So "run Pterodactyl on a Mac" has always meant "run a Linux VM on a Mac."
+
+This fork replaces Wings' container layer with host processes, so a Mac can be a
+Pterodactyl node with no VM involved.
+
+## What works
+
+- Full Panel integration: console, file manager, SFTP, power actions, and live
+  CPU / memory / disk graphs
+- Servers **survive a Wings restart** — stdin is a FIFO, stdout is a log file,
+  and the process gets its own session, so a later Wings adopts it by pid
+- Backups, transfers and the egg install flow
+- Linux is unaffected: the Docker environment is untouched and still the default
+  there
+
+## What is different or missing
+
+| | upstream | this fork |
+| --- | --- | --- |
+| isolation | container per server | none — plain processes |
+| memory / CPU limits | enforced via cgroups | reported only, not enforced |
+| egg install | runs in the installer image | runs on the host (see below) |
+| server user | dedicated `pterodactyl` user | the user running Wings |
+
+Egg install scripts hardcode `/mnt/server` and `/mnt/install`. There is nothing
+to mount those onto, and macOS's sealed root filesystem means `/mnt` cannot even
+be created, so the script text is rewritten to point at the real directories.
+This works for essentially every real egg, but a script that assembles a path at
+runtime (`cd /mnt/${dir}`) will not be caught and will fail. Whatever the startup
+command invokes — `java`, `node`, `python` — must exist on the host's `PATH`; no
+image supplies it.
+
+## Requirements
+
+- macOS (developed and run on macOS 26, Intel; the code is not
+  architecture-specific)
+- Go 1.24+ to build
+- Whatever runtime your servers need, installed on the host
+
+## Build
+
+```bash
+go build -o wings .
+```
+
+Cross-compiling from another platform works too: `GOOS=darwin go build .`
+
+## Configure
+
+Set the environment mode in `config.yml`:
+
+```yaml
+system:
+  environment: native   # docker | native | auto
+```
+
+`auto` (the default) selects `native` on macOS and `docker` everywhere else, so
+an existing Linux config keeps its current behaviour with no change.
+
+Two things worth knowing when running as a non-root user:
+
+- An unprivileged process cannot bind ports below 1024. If your Panel's *Daemon
+  Port* is 443, either change it, put a reverse proxy in front, or set
+  `ignore_panel_config_updates: true` and pin `api.port` yourself — the Panel
+  pushes `api.port = daemonListen` whenever a node is saved.
+- Use a data directory the user can write. `/var/lib/pterodactyl` needs root.
+
+### macOS gotcha: Local Network permission
+
+If your servers cannot reach anything on your LAN — a database on another
+machine, say — and you get `EHOSTUNREACH` / `NoRouteToHostException` while the
+same connection works fine from your shell, this is **not** a networking problem.
+
+macOS 15+ requires Local Network permission, and a process started by `launchd`
+has no UI, so it can never trigger the permission prompt — it just fails. Grant
+it under **System Settings → Privacy & Security → Local Network**. Apple-signed
+binaries and processes running as root are unaffected, which is what makes this
+so confusing to diagnose.
+
+## Notes for anyone porting Wings elsewhere
+
+The Docker code was not the hard part — the Docker SDK is a pure-Go HTTP client
+and cross-compiles to darwin untouched. The work was in `internal/ufs`, the
+sandboxed filesystem layer, whose files are tagged `//go:build unix` but use
+Linux-only syscalls:
+
+- **`/proc/self/fd/N` does not exist on macOS.** Wings uses it to confirm where a
+  descriptor actually landed after opening a multi-component path — `O_NOFOLLOW`
+  only guards the final component, so an intermediate symlink could otherwise
+  escape the sandbox. The macOS equivalent is `fcntl(F_GETPATH)`.
+- `F_GETPATH` returns **firmlink-resolved** paths, so a base directory under
+  `/var`, `/tmp` or `/etc` comes back as `/private/...` and every sandbox check
+  fails closed. The base is resolved once and results are translated back.
+- There is no `openat2`/`RESOLVE_BENEATH` on XNU, so darwin takes the
+  pre-5.6-kernel `openat` path that validates in userspace. `NewUnixFS` clamps
+  the request so a caller asking for openat2 cannot get a filesystem where every
+  operation returns `ENOSYS`.
+- Don't reach for `x/sys/unix.Getdirentries` on darwin — it emulates `getdents`
+  by re-opening the directory and skipping N entries per call, which is O(n²).
+  Use `fdopendir` (via `os.File.ReadDir`).
+
+Process accounting for the Panel's graphs uses `proc_info(2)`
+(`PROC_PIDTASKINFO` / `PROC_PIDTBSDINFO`) directly, so there is no cgo
+dependency, and it sums across the process group so a shell wrapper doesn't
+under-report.
+
+## Tests
+
+```bash
+go test ./...
+```
+
+The full upstream suite passes on macOS, including the sandbox escape tests on
+the `openat` fallback path. The Linux build and test suite are unaffected —
+please keep it that way in any PR.
+
+## Support
+
+Provided as-is, with no support and no guarantee of tracking upstream releases.
+Bugs in this fork are **not** the Pterodactyl project's problem — please do not
+open issues on their tracker for anything here.
+
+## License
+
+MIT, same as upstream. See [LICENSE](LICENSE); the original copyright notice is
+retained. Pterodactyl is a trademark of its owners; this project is not
+affiliated with them.

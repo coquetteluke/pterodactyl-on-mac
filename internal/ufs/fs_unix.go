@@ -7,10 +7,8 @@ package ufs
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -25,6 +23,15 @@ type UnixFS struct {
 	// basePath is the base path for file operations to take place in.
 	basePath string
 
+	// realBasePath is basePath with any symlinks in it resolved. It is only
+	// used to compare against paths that came back from the kernel already
+	// fully resolved; everything user-facing keeps using basePath.
+	//
+	// On Linux the two are identical. On darwin they differ whenever the base
+	// lives under a firmlink such as /var, /tmp or /etc, all of which resolve
+	// to /private/...
+	realBasePath string
+
 	// useOpenat2 controls whether the `openat2` syscall is used instead of the
 	// older `openat` syscall.
 	useOpenat2 bool
@@ -34,11 +41,15 @@ type UnixFS struct {
 // sandbox path, operations on BasePath itself are not allowed, but any
 // operations on its descendants are. Symlinks pointing outside BasePath are
 // checked and prevented from enabling an escape in a non-raceable manor.
+// On platforms with no openat2 syscall the request is silently downgraded to
+// openat, which validates paths in userspace instead. Honoring the caller here
+// would produce a filesystem where every operation fails with ENOSYS.
 func NewUnixFS(basePath string, useOpenat2 bool) (*UnixFS, error) {
 	basePath = strings.TrimSuffix(basePath, "/")
 	fs := &UnixFS{
-		basePath:   basePath,
-		useOpenat2: useOpenat2,
+		basePath:     basePath,
+		realBasePath: resolveBasePath(basePath),
+		useOpenat2:   useOpenat2 && openat2Available,
 	}
 	return fs, nil
 }
@@ -162,7 +173,7 @@ func (fs *UnixFS) Chtimesat(dirfd int, name string, atime, mtime time.Time) erro
 	var utimes [2]unix.Timespec
 	set := func(i int, t time.Time) {
 		if t.IsZero() {
-			utimes[i] = unix.Timespec{Sec: unix.UTIME_OMIT, Nsec: unix.UTIME_OMIT}
+			utimes[i] = unix.Timespec{Sec: utimeOmit, Nsec: utimeOmit}
 		} else {
 			utimes[i] = unix.NsecToTimespec(t.UnixNano())
 		}
@@ -685,26 +696,13 @@ func (fs *UnixFS) openat(dirfd int, name string, flag int, mode FileMode) (int, 
 	// If we are not using openat2, do additional path checking. This assumes
 	// that openat2 is using `RESOLVE_BENEATH` to avoid the same security
 	// issue.
-	var finalPath string
-	finalPath, err := filepath.EvalSymlinks(filepath.Join("/proc/self/fd/", strconv.Itoa(fd)))
-	if err != nil {
-		if !errors.Is(err, ErrNotExist) {
-			return fd, fmt.Errorf("failed to evaluate symlink: %w", convertErrorType(err))
-		}
-
-		// The target of one of the symlinks (EvalSymlinks is recursive)
-		// does not exist. So get the path that does not exist and use
-		// that for further validation instead.
-		var pErr *PathError
-		if !errors.As(err, &pErr) {
-			return fd, fmt.Errorf("failed to evaluate symlink: %w", convertErrorType(err))
-		}
-
-		// Update the final path to whatever directory or path didn't exist while
-		// recursing any symlinks.
-		finalPath = pErr.Path
-		// Ensure the error is wrapped correctly.
-		err = convertErrorType(err)
+	//
+	// O_NOFOLLOW only protects the final component, so an intermediate symlink
+	// in a multi-component path could still have escaped the sandbox. Ask the
+	// kernel where this descriptor actually landed and verify it.
+	finalPath, softErr, fatalErr := fs.resolveFdPath(fd)
+	if fatalErr != nil {
+		return fd, fatalErr
 	}
 
 	// Check if the path is within our root.
@@ -721,7 +719,7 @@ func (fs *UnixFS) openat(dirfd int, name string, flag int, mode FileMode) (int, 
 	}
 
 	// Return the file descriptor and any potential error.
-	return fd, err
+	return fd, softErr
 }
 
 // _openat is a wrapper around unix.Openat. This method should never be directly
@@ -747,44 +745,10 @@ func (fs *UnixFS) _openat(dirfd int, name string, flag int, mode uint32) (int, e
 	}
 }
 
-// _openat2 is a wonderful syscall that supersedes the `openat` syscall. It has
-// improved validation and security characteristics that weren't available or
-// considered when `openat` was originally implemented. As such, it is only
-// present in Kernel 5.6 and above.
-//
-// This method should never be directly called, use `openat` instead.
-func (fs *UnixFS) _openat2(dirfd int, name string, flag, mode uint64) (int, error) {
-	// Ensure the O_CLOEXEC flag is set.
-	// Go sets this when using the os package, but since we are directly using
-	// the unix package we need to set it ourselves.
-	if flag&O_CLOEXEC == 0 {
-		flag |= O_CLOEXEC
-	}
-	// Ensure the O_LARGEFILE flag is set.
-	// Go sets this for unix.Open, unix.Openat, but not unix.Openat2.
-	if flag&O_LARGEFILE == 0 {
-		flag |= O_LARGEFILE
-	}
-	fd, err := unix.Openat2(dirfd, name, &unix.OpenHow{
-		Flags: flag,
-		Mode:  mode,
-		// This is the bread and butter of preventing a symlink escape, without
-		// this option, we have to handle path validation fully on our own.
-		//
-		// This is why using Openat2 over Openat is preferred if available.
-		Resolve: unix.RESOLVE_BENEATH,
-	})
-	switch {
-	case err == nil:
-		return fd, nil
-	case err == unix.EINTR:
-		return fd, err
-	case err == unix.EAGAIN:
-		return fd, err
-	default:
-		return fd, ensurePathError(err, "openat2", name)
-	}
-}
+// _openat2 is defined per-GOOS. On Linux it wraps the openat2 syscall; on
+// darwin, which has no equivalent, it is unreachable because
+// config.UseOpenat2 always reports false there. See openat2_linux.go and
+// openat2_darwin.go.
 
 func (fs *UnixFS) SafePath(path string) (int, string, func(), error) {
 	return fs.safePath(path)

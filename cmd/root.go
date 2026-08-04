@@ -149,7 +149,11 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 		return
 	}
 
-	if err := environment.ConfigureDocker(cmd.Context()); err != nil {
+	// Servers running as host processes never touch Docker, so do not require
+	// a working daemon just to boot.
+	if config.UseNativeEnvironment() {
+		log.Info("using the native process environment; server resource limits are advisory only")
+	} else if err := environment.ConfigureDocker(cmd.Context()); err != nil {
 		log.WithField("error", err).Fatal("failed to configure docker environment")
 		return
 	}

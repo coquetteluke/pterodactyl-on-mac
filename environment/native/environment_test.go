@@ -1,0 +1,300 @@
+//go:build darwin
+
+package native
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/pterodactyl/wings/config"
+	"github.com/pterodactyl/wings/environment"
+	"github.com/pterodactyl/wings/remote"
+)
+
+// newTestEnvironment builds a native environment whose "server" is a shell loop
+// that echoes whatever is sent to its stdin and exits when told to stop. That
+// is enough to exercise the whole console path: FIFO stdin, log tailing,
+// process group signalling and exit reporting.
+func newTestEnvironment(t *testing.T, startup string, stop remote.ProcessStopConfiguration) *Environment {
+	t.Helper()
+
+	root := t.TempDir()
+	serverDir := filepath.Join(root, "servers", "test")
+	if err := os.MkdirAll(serverDir, 0o755); err != nil {
+		t.Fatalf("mkdir server dir: %v", err)
+	}
+
+	config.Set(&config.Configuration{
+		// config.Set derives a JWT key from this and panics if it is empty.
+		AuthenticationToken: "test-token",
+		System: config.SystemConfiguration{
+			RootDirectory: root,
+			Environment:   "native",
+			Timezone:      "UTC",
+			Username:      "pterodactyl",
+		},
+	})
+
+	envCfg := environment.NewConfiguration(environment.Settings{
+		Mounts: []environment.Mount{{Default: true, Source: serverDir, Target: "/home/container"}},
+		Limits: environment.Limits{MemoryLimit: 128},
+	}, []string{"STARTUP=" + startup})
+
+	e, err := New("test-server", &Metadata{Stop: stop}, envCfg)
+	if err != nil {
+		t.Fatalf("new environment: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = e.Terminate(context.Background(), "SIGKILL")
+	})
+	return e
+}
+
+// echoLoop reads stdin forever, echoing each line, and exits on "stop".
+const echoLoop = `while IFS= read -r line; do echo "got:$line"; if [ "$line" = "stop" ]; then echo "bye"; exit 7; fi; done`
+
+func waitFor(t *testing.T, what string, fn func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if fn() {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
+func TestNativeEnvironment_ConsoleRoundTrip(t *testing.T) {
+	e := newTestEnvironment(t, echoLoop, remote.ProcessStopConfiguration{
+		Type:  remote.ProcessStopCommand,
+		Value: "stop",
+	})
+
+	var mu sync.Mutex
+	var lines []string
+	e.SetLogCallback(func(b []byte) {
+		mu.Lock()
+		defer mu.Unlock()
+		lines = append(lines, string(b))
+	})
+	hasLine := func(want string) func() bool {
+		return func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			for _, l := range lines {
+				if strings.TrimSpace(l) == want {
+					return true
+				}
+			}
+			return false
+		}
+	}
+
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	waitFor(t, "process to be running", func() bool {
+		ok, _ := e.IsRunning(context.Background())
+		return ok
+	})
+
+	// Commands must reach the process through the FIFO, and its output must
+	// come back out of the tailed log file.
+	if err := e.SendCommand("hello"); err != nil {
+		t.Fatalf("send command: %v", err)
+	}
+	waitFor(t, "echoed command", hasLine("got:hello"))
+
+	// Uptime is derived from the kernel's process start time.
+	up, err := e.Uptime(context.Background())
+	if err != nil {
+		t.Fatalf("uptime: %v", err)
+	}
+	if up <= 0 {
+		t.Fatalf("expected positive uptime, got %d", up)
+	}
+
+	// Readlog reads the same output back off disk.
+	logged, err := e.Readlog(50)
+	if err != nil {
+		t.Fatalf("readlog: %v", err)
+	}
+	if !containsLine(logged, "got:hello") {
+		t.Fatalf("expected readlog to contain the echoed command, got %q", logged)
+	}
+
+	// A stop command exits the process, and the exit code is reported.
+	// WaitForStop must return as soon as the process is reaped rather than
+	// sitting on its timeout, so time the call and require it to be prompt.
+	stopStart := time.Now()
+	if err := e.WaitForStop(context.Background(), 10*time.Second, true); err != nil {
+		t.Fatalf("wait for stop: %v", err)
+	}
+	if elapsed := time.Since(stopStart); elapsed > 5*time.Second {
+		t.Fatalf("WaitForStop blocked for %v; it should return when the process exits, not when the timeout expires", elapsed)
+	}
+	waitFor(t, "offline state", func() bool {
+		return e.State() == environment.ProcessOfflineState
+	})
+
+	code, oom, err := e.ExitState()
+	if err != nil {
+		t.Fatalf("exit state: %v", err)
+	}
+	if code != 7 {
+		t.Fatalf("expected exit code 7 from the stop command, got %d", code)
+	}
+	if oom {
+		t.Fatal("darwin has no OOM killer; oom should never be reported")
+	}
+}
+
+func containsLine(lines []string, want string) bool {
+	for _, l := range lines {
+		if strings.TrimSpace(l) == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestNativeEnvironment_TerminateKillsProcessGroup(t *testing.T) {
+	// A startup command that is not a simple exec: the shell stays alive as
+	// the group leader with a child doing the real work. Signalling only the
+	// leader would leave the child running, which is what the process group
+	// handling exists to prevent.
+	e := newTestEnvironment(t, `sleep 300 & echo "child:$!"; wait`, remote.ProcessStopConfiguration{
+		Type:  remote.ProcessStopSignal,
+		Value: "SIGTERM",
+	})
+
+	var mu sync.Mutex
+	var out []string
+	e.SetLogCallback(func(b []byte) {
+		mu.Lock()
+		defer mu.Unlock()
+		out = append(out, string(b))
+	})
+
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitFor(t, "child pid announcement", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(out) > 0
+	})
+
+	mu.Lock()
+	line := strings.TrimSpace(out[0])
+	mu.Unlock()
+
+	var childPid int
+	if _, err := fmtSscan(line, &childPid); err != nil {
+		t.Fatalf("could not parse child pid from %q: %v", line, err)
+	}
+	if !processIsAlive(childPid) {
+		t.Fatalf("child %d should be alive", childPid)
+	}
+
+	if err := e.Terminate(context.Background(), "SIGKILL"); err != nil {
+		t.Fatalf("terminate: %v", err)
+	}
+
+	waitFor(t, "child process to die with the group", func() bool {
+		return !processIsAlive(childPid)
+	})
+}
+
+// fmtSscan parses "child:<pid>".
+func fmtSscan(line string, pid *int) (int, error) {
+	_, after, _ := strings.Cut(line, ":")
+	var n int
+	var err error
+	n, err = parseInt(strings.TrimSpace(after))
+	*pid = n
+	return n, err
+}
+
+func parseInt(s string) (int, error) {
+	var n int
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return 0, os.ErrInvalid
+		}
+		n = n*10 + int(r-'0')
+	}
+	if s == "" {
+		return 0, os.ErrInvalid
+	}
+	return n, nil
+}
+
+func TestNativeEnvironment_StatsReflectRealUsage(t *testing.T) {
+	// Burn CPU so the sampler has something unambiguous to measure.
+	e := newTestEnvironment(t, `a=0; while :; do a=$((a+1)); done`, remote.ProcessStopConfiguration{
+		Type:  remote.ProcessStopSignal,
+		Value: "SIGKILL",
+	})
+
+	// The bus emits JSON-encoded events, so decode them back into Stats.
+	raw := make(chan []byte, 32)
+	e.Events().On(raw)
+
+	stats := make(chan environment.Stats, 8)
+	go func() {
+		for b := range raw {
+			var ev struct {
+				Topic string
+				Data  environment.Stats
+			}
+			if err := json.Unmarshal(b, &ev); err != nil || ev.Topic != environment.ResourceEvent {
+				continue
+			}
+			select {
+			case stats <- ev.Data:
+			default:
+			}
+		}
+	}()
+
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	// The first sample has no previous reading to difference against, so wait
+	// for one that carries a real CPU figure.
+	deadline := time.After(15 * time.Second)
+	for {
+		select {
+		case s := <-stats:
+			if s.CpuAbsolute <= 0 {
+				continue
+			}
+			if s.Memory == 0 {
+				t.Fatalf("expected non-zero resident memory, got %+v", s)
+			}
+			if s.MemoryLimit == 0 {
+				t.Fatalf("expected the configured memory limit to be reported, got %+v", s)
+			}
+			if s.Uptime <= 0 {
+				t.Fatalf("expected positive uptime, got %+v", s)
+			}
+			// A single busy shell loop should be pegging roughly one core.
+			if s.CpuAbsolute < 20 {
+				t.Fatalf("expected a busy loop to show meaningful cpu, got %.2f", s.CpuAbsolute)
+			}
+			return
+		case <-deadline:
+			t.Fatal("timed out waiting for a resource sample with cpu usage")
+		}
+	}
+}
