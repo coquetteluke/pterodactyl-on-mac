@@ -36,6 +36,7 @@ info()  { printf '\033[1;34m==>\033[0m %s\n' "$1"; }
 warn()  { printf '\033[1;33m warning:\033[0m %s\n' "$1" >&2; }
 die()   { printf '\033[1;31m error:\033[0m %s\n' "$1" >&2; exit 1; }
 
+main() {
 MODE=node
 LAUNCHAGENT=0
 for arg in "$@"; do
@@ -44,7 +45,29 @@ for arg in "$@"; do
     --node) MODE=node ;;
     --launchagent) LAUNCHAGENT=1 ;;
     -h|--help)
-      sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
+      # Printed inline rather than read back out of $0: when this script is
+      # piped into bash there is no file to read.
+      cat <<'USAGE'
+Installer for Pterodactyl on Mac.
+
+  Node only (default) -- this Mac runs game servers, your Panel lives
+  somewhere else, such as a Raspberry Pi on the same network:
+
+    curl -fsSL https://raw.githubusercontent.com/coquetteluke/pterodactyl-on-mac/main/install.sh | bash
+
+  Everything -- Panel and node on this one Mac, nothing else needed:
+
+    curl -fsSL https://raw.githubusercontent.com/coquetteluke/pterodactyl-on-mac/main/install.sh | bash -s -- --full
+
+  Options:
+    --node          install only the wings daemon (default)
+    --full          also install the Panel, MariaDB, PHP and nginx
+    --launchagent   install a LaunchAgent so wings starts at login
+
+This fork removes the container boundary that upstream Wings relies on for
+isolation. It is for single-tenant machines only. See
+https://github.com/coquetteluke/pterodactyl-on-mac#readme
+USAGE
       exit 0
       ;;
     *) die "unknown option: $arg (try --help)" ;;
@@ -59,6 +82,8 @@ case "$(uname -m)" in
   x86_64) ARCH=amd64 ;;
   *) die "unsupported architecture: $(uname -m)" ;;
 esac
+run
+}
 
 # ---------------------------------------------------------------------------
 # Wings
@@ -74,7 +99,6 @@ install_wings() {
   asset="wings_darwin_${ARCH}"
   base="https://github.com/${REPO}/releases/download/${tag}"
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' RETURN
 
   info "Downloading ${asset} (${tag})"
   curl -fsSL -o "${tmp}/wings" "${base}/${asset}" || die "download failed"
@@ -101,6 +125,7 @@ install_wings() {
 
   mkdir -p "$PREFIX"
   mv "${tmp}/wings" "${PREFIX}/wings"
+  rm -rf "$tmp"
   info "Installed $("${PREFIX}/wings" version | head -1) to ${PREFIX}/wings"
 
   mkdir -p "${DATA_DIR}"/{volumes,logs/install,archives,backups,tmp}
@@ -227,7 +252,7 @@ SQL
 
   info "Installing PHP dependencies"
   ( cd "$PANEL_DIR" && "$php" "$composer_bin" install --no-dev --optimize-autoloader --no-interaction ) \
-    >/dev/null || die "composer install failed"
+    </dev/null >/dev/null || die "composer install failed"
 
   info "Configuring the Panel"
   local url="http://$(hostname -s).local:${PANEL_PORT}"
@@ -248,7 +273,7 @@ SQL
       --email="admin@$(hostname -s).local" --username=admin \
       --name-first=Admin --name-last=User \
       --password="$adminpass" --admin=1 --no-interaction >/dev/null
-  ) || die "panel setup failed"
+  ) </dev/null || die "panel setup failed"
 
   write_panel_services "$php" "$bp" "$url" "$dbpass" "$adminpass"
 }
@@ -358,6 +383,7 @@ CREDS
 
 # ---------------------------------------------------------------------------
 
+run() {
 if [ "$MODE" = full ]; then
   install_panel
 fi
@@ -444,3 +470,11 @@ $(info "Next steps")
 
 EOF
 fi
+}
+
+# Everything above is definitions only. Nothing runs until this line, which is
+# what makes `curl ... | bash` safe: bash has to read the entire script to parse
+# these functions, so a half-downloaded script cannot execute a truncated
+# install, and no child process can consume the remainder of the script as its
+# own stdin.
+main "$@"
