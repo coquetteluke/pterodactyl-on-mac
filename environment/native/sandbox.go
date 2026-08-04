@@ -21,7 +21,7 @@ const sandboxProfileName = "sandbox.sb"
 // change to the configured denials takes effect on the next restart instead of
 // whenever the file happens to be rewritten.
 func (e *Environment) sandboxCommand(dir, startup string) ([]string, error) {
-	plain := []string{"/bin/sh", "-c", startup}
+	plain := []string{"/bin/sh", "-c", e.applyProcessLimit(startup)}
 
 	cfg := config.Get()
 	if !cfg.System.Sandbox.Enabled {
@@ -32,9 +32,10 @@ func (e *Environment) sandboxCommand(dir, startup string) ([]string, error) {
 	}
 
 	body, err := sandbox.Generate(sandbox.Profile{
-		ServerDir: dir,
-		WingsRoot: cfg.System.RootDirectory,
-		Deny:      cfg.System.Sandbox.Deny,
+		ServerDir:     dir,
+		WingsRoot:     cfg.System.RootDirectory,
+		Deny:          cfg.System.Sandbox.Deny,
+		HideProcesses: cfg.System.Sandbox.HideProcesses,
 	})
 	if err != nil {
 		return nil, errors.WrapIf(err, "environment/native: failed to build the sandbox profile")

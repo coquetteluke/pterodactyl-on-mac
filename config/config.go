@@ -208,6 +208,15 @@ type SystemConfiguration struct {
 		// world-readable files elsewhere; what it cannot read is anything
 		// named here.
 		Deny []string `yaml:"deny"`
+
+		// HideProcesses stops a server from seeing any process on the machine
+		// but its own, which is the closest macOS gets to a PID namespace.
+		//
+		// Off by default because it is absolute: ps, top and pgrep stop working
+		// inside the server entirely, since they must enumerate before they can
+		// filter. A JVM is unaffected; a startup script that shells out to ps
+		// is not.
+		HideProcesses bool `yaml:"hide_processes" default:"false"`
 	} `yaml:"sandbox"`
 
 	// NetworkIsolation confines what each server can reach on the network.

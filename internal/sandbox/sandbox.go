@@ -50,6 +50,21 @@ type Profile struct {
 	// Deny lists additional paths to withhold. Operators use this for secrets
 	// that live outside Wings' directory, such as ssh keys.
 	Deny []string
+
+	// HideProcesses stops a server seeing any process but its own.
+	//
+	// This is the closest thing macOS has to a PID namespace. It does not
+	// renumber pids, so it is not one: what it removes is the ability to
+	// enumerate or inspect anything else running on the machine. Sending
+	// signals to another server is already refused by the per-server accounts,
+	// so together they cover what a PID namespace would.
+	//
+	// It is off by default because it is absolute: ps, top and pgrep stop
+	// working inside the server entirely, including on itself, since they have
+	// to enumerate before they can filter. A JVM is unaffected, but a startup
+	// script that shells out to ps to check whether something is running will
+	// break.
+	HideProcesses bool
 }
 
 // Generate renders a sandbox profile in SBPL, the Scheme-like language
@@ -118,6 +133,13 @@ func Generate(p Profile) (string, error) {
 	b.WriteString("; The server's own data directory, carved back out. This comes last so it\n")
 	b.WriteString("; wins over the denials above.\n")
 	fmt.Fprintf(&b, "(allow file-read* file-write* %s)\n", subpath(serverDir))
+
+	if p.HideProcesses {
+		b.WriteString("\n; Everything else on the machine becomes invisible. Signals to other\n")
+		b.WriteString("; servers are already refused by their separate accounts, so this covers\n")
+		b.WriteString("; the remaining half of what a PID namespace would give.\n")
+		b.WriteString("(deny process-info* (target others))\n")
+	}
 
 	return b.String(), nil
 }

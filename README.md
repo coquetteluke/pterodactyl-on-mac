@@ -33,24 +33,31 @@ and off by default**. One command turns on all three
 | --- | --- | --- |
 | Filesystem | an account per server, plus the kernel sandbox | [details](#per-server-accounts) |
 | Network | pf rules matched on each server's uid | [details](#network-isolation) |
+| Processes | separate accounts refuse cross-server signals; the sandbox can hide other processes entirely | [details](#process-isolation) |
+| Process count | `RLIMIT_NPROC`, enforced by the kernel, so a fork bomb hits its own ceiling | [details](#process-isolation) |
 | Memory and CPU | supervision, not kernel quotas | [details](#resource-limits) |
 
-**What still has no equivalent here**, and cannot be given one:
+**What still has no equivalent here**, and cannot be given one. These are the
+reasons this is not safe to rent out, and none of them is going to be fixed:
 
-- **No PID namespace.** Servers can see each other's processes exist and can
-  signal anything running as their own account.
-- **Resource limits react rather than prevent.** macOS has no cgroups, so Wings
-  watches and intervenes: memory is sampled once a second, and CPU is capped by
-  stopping the process in short bursts. That is enough to stop one server
-  ruining a machine, but a kernel quota it is not.
+- **Memory and CPU limits react rather than prevent.** macOS has no cgroups and
+  no public per-process CPU quota. Wings watches and intervenes: memory is
+  sampled once a second, and CPU is capped by stopping the process in short
+  bursts. Enough to stop one server ruining a machine; not a kernel quota. A
+  server that allocates several gigabytes instantly still wins the race.
 - **The filesystem sandbox denies by exception, not by default.** It withholds
-  what you name; it does not confine a server to a private view of the disk the
-  way a mount namespace does.
+  what you name. It does not confine a server to a private view of the disk the
+  way a mount namespace does, so a server can still read world-readable files
+  elsewhere on the machine.
+- **No disk quotas.** APFS does not support them at all, so a server can fill
+  the disk and take the machine down with it. Neither does upstream enforce a
+  quota at write time, but on Linux you can at least put servers on a quota'd
+  filesystem. Here you cannot.
 
-Not a difference, but worth knowing either way: **neither this fork nor upstream
-enforces a disk quota at write time.** Wings measures disk use and refuses to
-start a server that is over its limit, but nothing stops a running server from
-filling the disk.
+So the shape of it: **the isolation boundaries are real, and the resource
+boundaries are not.** A hostile server can be kept out of your files, off your
+network and away from your other servers. It cannot reliably be stopped from
+degrading or halting the machine everything runs on.
 
 So: **do not rent servers on this to strangers.** If you are running a homelab
 node where you own every server, the isolation above is worth turning on and is
@@ -592,6 +599,54 @@ on:
 - Path metadata inside wings' directory stays readable, because a server that
   cannot `stat` its own parents cannot `chdir` into its own directory. Names and
   sizes leak; contents do not.
+
+## Process isolation
+
+A PID namespace does two things: it stops a server seeing other processes, and
+it stops it touching them. macOS has no namespaces, but both halves can be had
+another way.
+
+**Signalling is already handled** by [per-server accounts](#per-server-accounts).
+A server runs as its own uid, and unix refuses a signal to a process owned by
+anyone else. Nothing extra to switch on.
+
+**Visibility** is the sandbox's job:
+
+```yaml
+system:
+  sandbox:
+    hide_processes: true
+```
+
+With this on, a server cannot enumerate or inspect any process but its own. It
+is off by default because it is absolute: `ps`, `top` and `pgrep` stop working
+inside the server entirely, including on itself, since they have to enumerate
+before they can filter. A JVM does not care. A startup script that shells out to
+`ps` to check whether something is running will break.
+
+What this is not: pids are not renumbered, so a server still sees the real pid
+space and can tell that pids exist. It just cannot look at them.
+
+### Process count
+
+The number of processes a server may run **is** enforced by the kernel, via
+`RLIMIT_NPROC`. This is the one resource limit on macOS that refuses rather than
+reacts: a fork bomb inside a server fails its own `fork` once it hits the
+ceiling, instead of exhausting the machine's process table.
+
+It reuses the same setting the Docker environment passes to a container, so a
+node behaves the same either way:
+
+```yaml
+docker:
+  container_pid_limit: 512
+```
+
+This only applies when the server has an account of its own. `RLIMIT_NPROC` is
+counted per uid across every process that uid owns, not per process tree, so
+without per-server accounts the limit would be shared between every server plus
+Wings itself, and the first server to start would set a budget for the whole
+machine. With no dedicated uid it is skipped rather than applied wrongly.
 
 ## Network isolation
 

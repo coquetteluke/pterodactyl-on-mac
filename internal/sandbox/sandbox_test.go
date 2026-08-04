@@ -158,3 +158,21 @@ func TestProfileIsEnforcedByTheKernel(t *testing.T) {
 		t.Error("a child process escaped the sandbox and read the node token")
 	}
 }
+
+func TestHideProcessesIsOptIn(t *testing.T) {
+	on, err := Generate(Profile{ServerDir: "/srv/p/v/a", WingsRoot: "/srv/p", HideProcesses: true})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if !strings.Contains(on, "(deny process-info* (target others))") {
+		t.Errorf("expected process hiding when asked for:\n%s", on)
+	}
+	off, err := Generate(Profile{ServerDir: "/srv/p/v/a", WingsRoot: "/srv/p"})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	// It breaks ps, top and pgrep outright, so it must never appear unasked.
+	if strings.Contains(off, "process-info") {
+		t.Errorf("process hiding must be opt-in:\n%s", off)
+	}
+}
