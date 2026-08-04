@@ -17,25 +17,45 @@ Not affiliated with or endorsed by the Pterodactyl project. Tracking Wings
 multi-tenant hosting.**
 
 Upstream Wings runs every server in its own Docker container, and a great deal
-of Pterodactyl's security model rests on that. This fork has no containers, so:
+of Pterodactyl's security model rests on that. This fork has no containers.
 
-- **Servers are not isolated from each other or from the host** by default.
-  Every server process runs as the same user, with that user's full filesystem
-  access. One server can read and modify another server's files, and can read
-  `config.yml` which contains the node token that authenticates to your Panel.
-  This one is fixable; see [per-server accounts](#per-server-accounts). The two
-  below are not.
-- **Resource limits are enforced by supervision, not by the kernel.** macOS has
-  no cgroups. Wings can hold a server to both its memory and CPU limits (see
-  [resource limits](#resource-limits)), but it does so by watching and reacting,
-  which is slower and coarser than a kernel quota: memory is checked once a
-  second, and CPU is capped by stopping the process in short bursts. Good enough
-  to stop one server ruining a machine; not a substitute for real isolation.
-- **There is no network isolation.** Servers bind host ports directly.
+**Out of the box there is no isolation at all.** Every server runs as the same
+user with that user's full filesystem access, so one server can read and modify
+another's files, and can read `config.yml`, which holds the node token that
+authenticates to your Panel. Every server can also reach anything the machine
+can: your Panel, other servers, the rest of your network.
 
-If you are renting servers to other people, use upstream Wings on Linux. This
-fork is intended for a **single-tenant** machine: a homelab node where you own
-every server on it.
+Most of that can be rebuilt from what macOS does have, but **all of it is opt-in
+and off by default**. One command turns on all three
+([isolation](#turning-on-isolation)):
+
+| what it covers | how it works | |
+| --- | --- | --- |
+| Filesystem | an account per server, plus the kernel sandbox | [details](#per-server-accounts) |
+| Network | pf rules matched on each server's uid | [details](#network-isolation) |
+| Memory and CPU | supervision, not kernel quotas | [details](#resource-limits) |
+
+**What still has no equivalent here**, and cannot be given one:
+
+- **No PID namespace.** Servers can see each other's processes exist and can
+  signal anything running as their own account.
+- **Resource limits react rather than prevent.** macOS has no cgroups, so Wings
+  watches and intervenes: memory is sampled once a second, and CPU is capped by
+  stopping the process in short bursts. That is enough to stop one server
+  ruining a machine, but a kernel quota it is not.
+- **The filesystem sandbox denies by exception, not by default.** It withholds
+  what you name; it does not confine a server to a private view of the disk the
+  way a mount namespace does.
+
+Not a difference, but worth knowing either way: **neither this fork nor upstream
+enforces a disk quota at write time.** Wings measures disk use and refuses to
+start a server that is over its limit, but nothing stops a running server from
+filling the disk.
+
+So: **do not rent servers on this to strangers.** If you are running a homelab
+node where you own every server, the isolation above is worth turning on and is
+a real improvement over nothing. If you are hosting for other people, use
+upstream Wings on Linux.
 
 ---
 
@@ -69,7 +89,7 @@ Pterodactyl node with no VM involved.
 | memory limit | enforced by the kernel | enforced by supervision, ~1s latency |
 | CPU limit | enforced via cgroups | enforced by supervision, opt-in |
 | egg install | runs in the installer image | runs on the host (see below) |
-| server user | dedicated `pterodactyl` user | the user running Wings |
+| server user | dedicated `pterodactyl` user | the user running Wings, or an account per server when isolation is on |
 
 Egg install scripts hardcode `/mnt/server` and `/mnt/install`. There is nothing
 to mount those onto, and macOS's sealed root filesystem means `/mnt` cannot even
@@ -435,6 +455,36 @@ system:
 A server with no configured limit is never killed for memory. Its ceiling is the
 machine, and it was allowed to use it.
 
+#### If you use `-XX:+AlwaysPreTouch`, the default 5% overhead is too tight
+
+The default allowance is the Panel's limit plus 5%, which assumes a process
+whose resident memory tracks what it is really using. A JVM started with
+`AlwaysPreTouch` commits its whole heap at startup instead, so an 8 GB heap
+shows roughly 9 GB resident from the first second and stays there. Against a
+10 GB Panel limit that is 84% of the kill threshold while the server is idle,
+and normal load pushes it over.
+
+The symptom is a server killed and reported as out of memory while its own
+metrics look fine, because the heap is nowhere near full. The heap is not the
+problem; metaspace, code cache, thread stacks, direct buffers and the collector's
+own structures all sit outside it.
+
+Give the non-heap overhead room rather than inflating the Panel number, which is
+what you budget with:
+
+```yaml
+docker:
+  overhead:
+    override: true
+    default_multiplier: 1.25
+```
+
+Rule of thumb: leave at least 1.5 GB between your heap size and the kill
+threshold, and be aware that on macOS a pre-touched heap does **not** shrink
+back the way it appears to on Linux. The memory compressor reclaims cold pages
+only over hours, not minutes, so a freshly restarted server sits at its
+committed size for a long time.
+
 ### CPU: enforced, off by default
 
 ```yaml
@@ -490,10 +540,13 @@ still run unprivileged, more so than before in fact.
 
 Two things worth knowing:
 
-- **This does not make the node safe for multi-tenant hosting.** There are still
-  no resource limits, so one server can exhaust the machine's memory and take
-  every other server down with it. Filesystem isolation without resource
-  isolation is not enough to rent servers to strangers.
+- **This alone does not make the node safe for multi-tenant hosting.** Accounts
+  keep servers out of each other's files, but a server can still fill the disk,
+  see every other process on the machine, and reach your Panel unless you also
+  turn on [network isolation](#network-isolation). Combine it with the
+  [sandbox](#filesystem-sandbox) and network rules, and read the list of what is
+  still missing at the top of this file before trusting it with anyone else's
+  workload.
 - Existing servers are chowned on their next boot, so their files stop being
   readable by the account you normally log in as. Use SFTP or the Panel's file
   manager rather than editing them directly over ssh.
@@ -698,9 +751,15 @@ sudo chown -R "$USER":staff ~/pterodactyl
 ~/.local/bin/wings --config ~/pterodactyl/config.yml
 ```
 
-Running as root also means your game servers run as root, which is a worse
-position than upstream Pterodactyl puts you in, where the container contains
-a compromised plugin.
+Running as root *by accident* also means your game servers run as root, which is
+a worse position than upstream Pterodactyl puts you in, where the container
+contains a compromised plugin.
+
+Note that this is different from [turning on isolation](#turning-on-isolation),
+which runs wings as root deliberately. There, root is what lets wings create the
+per-server accounts and load the firewall rules, and each server then drops to
+an account of its own, so the servers end up **less** privileged, not more. The
+problem described here is wings running as root while servers inherit that.
 
 ### The "accept the EULA" dialog never appears
 
@@ -716,7 +775,24 @@ setting `eula=true` in `eula.txt` through the Panel's file manager.
 
 ### Servers cannot reach a database on another machine
 
-That is macOS Local Network permission, not networking. See below.
+Two different causes, and they look identical from the server's side.
+
+If you have **network isolation** on, this is working as intended: a database on
+your LAN sits in a private range, and those are blocked. Add its address to
+`allow_out` and restart wings:
+
+```yaml
+system:
+  network_isolation:
+    allow_out:
+      - 192.168.1.50
+```
+
+`sudo pfctl -a wings -s rules` shows what is actually loaded, which is the
+quickest way to tell whether a rule is the cause.
+
+If isolation is **off**, it is macOS Local Network permission rather than
+networking. See below.
 
 ## macOS gotcha: Local Network permission
 
