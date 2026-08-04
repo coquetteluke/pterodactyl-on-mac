@@ -140,6 +140,33 @@ chmod +x wings_darwin_arm64 && mv wings_darwin_arm64 ~/.local/bin/wings
 
 Use `wings_darwin_amd64` on an Intel Mac.
 
+### Uninstalling
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/coquetteluke/pterodactyl-on-mac/main/uninstall.sh | bash
+```
+
+This stops any running servers, removes the wings binary and its LaunchAgent,
+and **leaves all of your data alone** — server files, worlds and the Panel
+database all stay, and it prints where they are so you can decide.
+
+Stopping the servers first matters: they run detached so they survive a wings
+restart, so simply deleting wings would leave a game server running with
+nothing supervising it.
+
+```bash
+# also remove the Panel, its services and its nginx site
+curl -fsSL .../uninstall.sh | bash -s -- --full
+
+# and delete the data too: server files, Panel directory, database
+curl -fsSL .../uninstall.sh | bash -s -- --full --purge
+```
+
+`--purge` makes you type `DELETE` to confirm, and refuses outright if there is
+no terminal to confirm on. Add `--yes` only if you are scripting it and certain.
+Homebrew packages are left installed either way, since something else on the
+machine may be using them; the uninstaller prints the command to remove them.
+
 ### Building from source
 
 Requires Go 1.24+ and whatever runtime your servers need on the host.
