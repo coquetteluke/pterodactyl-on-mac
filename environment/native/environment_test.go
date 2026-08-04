@@ -554,6 +554,81 @@ func TestExpandStartupVariables_DoesNotReevaluate(t *testing.T) {
 	// step does not introduce a second round of evaluation.)
 }
 
+// A server that fails immediately still has something to say, and that is
+// precisely when the operator needs to hear it. The console tail is torn down
+// the moment the process exits, so without an explicit drain its final output
+// is lost to the race with the poll interval and the server appears to die in
+// silence -- which is exactly how a broken startup command presented in the
+// field: "Exit code: 1" and nothing else.
+func TestNativeEnvironment_LastWordsOfADyingServerAreNotLost(t *testing.T) {
+	const cry = "Error: Unable to access jarfile server.jar"
+
+	e := newTestEnvironment(t,
+		`echo "`+cry+`" >&2; exit 1`,
+		remote.ProcessStopConfiguration{Type: remote.ProcessStopSignal, Value: "SIGKILL"})
+
+	var mu sync.Mutex
+	var lines []string
+	e.SetLogCallback(func(b []byte) {
+		mu.Lock()
+		defer mu.Unlock()
+		lines = append(lines, string(b))
+	})
+
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	waitFor(t, "the server to be reported offline", func() bool {
+		return e.State() == environment.ProcessOfflineState
+	})
+
+	waitFor(t, "the dying server's output to reach the console", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, l := range lines {
+			if strings.Contains(l, cry) {
+				return true
+			}
+		}
+		return false
+	})
+
+	if code, _, _ := e.ExitState(); code != 1 {
+		t.Fatalf("expected exit code 1, got %d", code)
+	}
+}
+
+// The same, for output with no trailing newline: a process killed mid-line
+// should still surface what it managed to write.
+func TestNativeEnvironment_PartialFinalLineIsFlushed(t *testing.T) {
+	e := newTestEnvironment(t,
+		`printf 'no trailing newline here'; exit 3`,
+		remote.ProcessStopConfiguration{Type: remote.ProcessStopSignal, Value: "SIGKILL"})
+
+	var mu sync.Mutex
+	var lines []string
+	e.SetLogCallback(func(b []byte) {
+		mu.Lock()
+		defer mu.Unlock()
+		lines = append(lines, string(b))
+	})
+
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitFor(t, "the partial line to be flushed", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, l := range lines {
+			if strings.Contains(l, "no trailing newline here") {
+				return true
+			}
+		}
+		return false
+	})
+}
+
 func TestNativeEnvironment_StatsReflectRealUsage(t *testing.T) {
 	// Burn CPU so the sampler has something unambiguous to measure.
 	e := newTestEnvironment(t, `a=0; while :; do a=$((a+1)); done`, remote.ProcessStopConfiguration{

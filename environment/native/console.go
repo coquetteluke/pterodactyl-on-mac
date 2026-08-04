@@ -231,6 +231,13 @@ func (e *Environment) tailConsole(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
+			// The context is cancelled when the process exits, which is exactly
+			// when a server has just written the most interesting thing it will
+			// ever write -- a stack trace, "Unable to access jarfile", the EULA
+			// notice. Returning here would discard anything produced since the
+			// last poll, so drain to EOF first. Without this a server that
+			// fails within one poll interval appears to exit silently.
+			e.drainConsole(f, &buf, chunk, &offset, emit)
 			return ctx.Err()
 		default:
 		}
@@ -268,11 +275,49 @@ func (e *Environment) tailConsole(ctx context.Context) error {
 		}
 
 		// Nothing new; wait before checking again.
+		//
+		// Cancellation is handled by looping back to the top rather than
+		// returning here, so that there is a single exit point and it is the
+		// one that drains. Returning directly would skip the drain on the most
+		// likely path of all: the process exiting while this is asleep.
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			continue
 		case <-time.After(consolePollInterval):
 		}
+	}
+}
+
+// drainConsole reads whatever is left in the console log and emits it,
+// including a final line with no trailing newline.
+//
+// Called when the tail is being torn down after the process exited, so that
+// its last output is not lost to the race between the process dying and the
+// poll loop noticing.
+func (e *Environment) drainConsole(f *os.File, buf *bytes.Buffer, chunk []byte, offset *int64, emit func([]byte)) {
+	for {
+		n, err := f.Read(chunk)
+		if n > 0 {
+			*offset += int64(n)
+			buf.Write(chunk[:n])
+			for {
+				i := bytes.IndexByte(buf.Bytes(), '\n')
+				if i < 0 {
+					break
+				}
+				line := buf.Next(i + 1)
+				emit(bytes.TrimRight(line[:len(line)-1], "\r"))
+			}
+			continue
+		}
+		if err != nil {
+			break
+		}
+		break
+	}
+	// A process that died mid-line still said something worth showing.
+	if buf.Len() > 0 {
+		emit(bytes.TrimRight(buf.Next(buf.Len()), "\r"))
 	}
 }
 
