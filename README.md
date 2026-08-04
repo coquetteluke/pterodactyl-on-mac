@@ -125,27 +125,14 @@ breaking the daemon the next time you save the node. If you would rather keep
 the Panel in charge, change the node's Daemon Port instead, or put a reverse
 proxy in front of a high port.
 
-## Configure
+`environment` accepts `docker`, `native`, or `auto`. `auto` is the default and
+selects `native` on macOS and `docker` everywhere else, so an existing Linux
+config keeps its current behaviour with no change.
 
-Set the environment mode in `config.yml`:
+Pick a data directory your user can write to. `/var/lib/pterodactyl`, the
+upstream default, needs root.
 
-```yaml
-system:
-  environment: native   # docker | native | auto
-```
-
-`auto` (the default) selects `native` on macOS and `docker` everywhere else, so
-an existing Linux config keeps its current behaviour with no change.
-
-Two things worth knowing when running as a non-root user:
-
-- An unprivileged process cannot bind ports below 1024. If your Panel's *Daemon
-  Port* is 443, either change it, put a reverse proxy in front, or set
-  `ignore_panel_config_updates: true` and pin `api.port` yourself — the Panel
-  pushes `api.port = daemonListen` whenever a node is saved.
-- Use a data directory the user can write. `/var/lib/pterodactyl` needs root.
-
-### macOS gotcha: Local Network permission
+## macOS gotcha: Local Network permission
 
 If your servers cannot reach anything on your LAN — a database on another
 machine, say — and you get `EHOSTUNREACH` / `NoRouteToHostException` while the
