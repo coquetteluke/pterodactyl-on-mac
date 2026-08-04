@@ -241,8 +241,11 @@ Run the same install command and pick **Remove it**, or go straight there:
 curl -fsSL https://raw.githubusercontent.com/coquetteluke/pterodactyl-on-mac/main/install.sh | bash -s -- --uninstall
 ```
 
-This stops any running servers, removes the wings binary and its LaunchAgent,
-and **leaves all of your data alone**. Server files, worlds and the Panel
+This stops any running servers and removes the wings binary along with whichever
+service is running it, the LaunchAgent or the LaunchDaemon. If isolation is on it
+is also undone: the firewall rules are dropped, `/etc/pf.conf` is restored, and
+your server files are handed back from the per-server accounts. It
+**leaves all of your data alone**. Server files, worlds and the Panel
 database all stay, and it prints where they are so you can decide.
 
 Stopping the servers first matters: they run detached so they survive a wings
@@ -356,8 +359,9 @@ brew install jq wget               # the installer does this for you
 ~/.local/bin/wings --config ~/pterodactyl/config.yml
 ```
 
-The node should go green in the Panel. Then stop it and install the LaunchAgent
-if you want it to survive reboots.
+The node should go green in the Panel. Then stop it. You do not need to install
+anything else to make it survive reboots: the installer already asked, and set up
+a LaunchAgent, or a LaunchDaemon if you turned isolation on.
 
 **6. Create the server** in the Panel as usual.
 
@@ -720,6 +724,11 @@ that is **over** its limit:
 It is off by default because on a machine running one server there is nothing to
 protect it from, and capping it can only make it slower. Turn it on when several
 servers share a machine and one of them misbehaving would ruin the others.
+
+## Troubleshooting
+
+Moved to [docs/troubleshooting.md](docs/troubleshooting.md), along with the macOS
+Local Network permission trap that causes the most confusing failures.
 
 ## Why this exists
 

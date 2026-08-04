@@ -27,7 +27,7 @@ func TestName_IsDeterministicAndShort(t *testing.T) {
 
 func TestName_DifferentServersDoNotCollide(t *testing.T) {
 	a := Name("a1b2c3d4-0000-4000-8000-000000000001")
-	b := Name("2d1a8abd-5bfb-4eb3-a5b8-787e14b8896a")
+	b := Name("b2c3d4e5-0000-4000-8000-000000000002")
 	if a == b {
 		t.Fatalf("distinct servers produced the same account name: %q", a)
 	}
@@ -38,8 +38,8 @@ func TestCandidateUID_StaysInsideTheReservedRange(t *testing.T) {
 	// are real login users. Allocating outside it would collide with either.
 	for _, uuid := range []string{
 		"a1b2c3d4-0000-4000-8000-000000000001",
-		"2d1a8abd-5bfb-4eb3-a5b8-787e14b8896a",
-		"0629d6e1-c5c8-4d4a-899d-c777798f2671",
+		"b2c3d4e5-0000-4000-8000-000000000002",
+		"c3d4e5f6-0000-4000-8000-000000000003",
 		"",
 		"not-a-uuid",
 	} {
