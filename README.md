@@ -79,6 +79,14 @@ image supplies it.
 
 ## Install
 
+There are two ways to run this, depending on where your Panel lives.
+
+### This Mac as a node, Panel elsewhere
+
+The common case: you already have a Panel — on a Raspberry Pi, another machine
+on your network, anywhere it can reach this Mac — and you want this Mac to run
+game servers for it.
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/coquetteluke/pterodactyl-on-mac/main/install.sh | bash
 ```
@@ -87,6 +95,38 @@ That picks the right binary for your Mac (Apple silicon or Intel), verifies it
 against the published `SHA256SUMS`, installs it to `~/.local/bin/wings`, creates
 the data directories, and prints the configuration you still need to do. Add
 `-s -- --launchagent` to also install a LaunchAgent that keeps it running.
+
+You then create the node in your existing Panel and paste its config here. Set
+the node's **Daemon Port to 8443**, not 443 — an unprivileged process cannot
+bind a port below 1024.
+
+### Everything on one Mac
+
+Panel and node together, nothing else needed:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/coquetteluke/pterodactyl-on-mac/main/install.sh | bash -s -- --full
+```
+
+This installs PHP, MariaDB and nginx through Homebrew, downloads the Panel, sets
+up its database, creates an admin account, and installs wings alongside it. The
+Panel ends up on `http://<your-mac>.local:8088`, with the generated admin and
+database passwords written to `CREDENTIALS.txt` in the Panel directory.
+
+Three things it deliberately does differently from the Linux install guide, all
+of which will otherwise waste your afternoon:
+
+- **PHP is pinned to 8.3.** Panel 1.15 accepts `^8.2 || ^8.3`, and Homebrew's
+  unversioned `php` is 8.4 or newer, which composer refuses outright.
+- **No Redis.** Homebrew's current Redis build aborts on startup over a broken
+  module path in its own shipped config. The Panel runs perfectly well on the
+  file cache and database queue, so it is simply not installed.
+- **Port 8088, not 8080.** Homebrew's stock `nginx.conf` already serves its
+  welcome page on 8080 and that block is parsed first, so it would win as the
+  default server for the port and the Panel would silently never be reached.
+
+Creating the node itself is still a few clicks in the UI — the Panel has no
+command for it — and the installer prints exactly what to fill in.
 
 If piping a script into your shell makes you uneasy — reasonable — read it
 first, or just grab the binary yourself from the
