@@ -249,6 +249,27 @@ days because the VM was powered off, not because anything failed.
 
 ## Resource limits
 
+### Watch out for `MaxRAMPercentage` in egg startup commands
+
+Several stock eggs, including Paper, start the JVM with something like
+`-Xms128M -XX:MaxRAMPercentage=95.0`. Inside a container that is exactly right:
+the JVM reads the cgroup limit and sizes its heap to 95% of what the server was
+given.
+
+There is no cgroup here, so the JVM reads the **whole machine** instead. On a
+16 GB Mac a server with a 4 GB limit will happily grow its heap toward 15 GB,
+sail past its limit, and be killed for it.
+
+Replace the percentage with an explicit ceiling that matches the Panel's memory
+limit, for example on a 4 GB server:
+
+```
+java -Xms1024M -Xmx3584M -jar {{SERVER_JARFILE}}
+```
+
+Leave headroom: `-Xmx` bounds the Java heap, not the whole process, and the JVM
+also needs metaspace, thread stacks and off-heap buffers on top.
+
 ### Memory — enforced, with caveats
 
 Wings already samples every server's resident memory once a second for the
