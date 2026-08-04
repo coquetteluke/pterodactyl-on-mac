@@ -487,7 +487,7 @@ func TestExpandStartupVariables(t *testing.T) {
 	env := []string{
 		"SERVER_JARFILE=server.jar",
 		"SERVER_MEMORY=4000",
-		"SERVER_IP=192.168.4.28",
+		"SERVER_IP=192.168.1.10",
 		"SERVER_PORT=25565",
 		"EMPTY=",
 	}
@@ -505,7 +505,7 @@ func TestExpandStartupVariables(t *testing.T) {
 		{
 			name: "several placeholders including repeats",
 			in:   "run --ip {{SERVER_IP}} --port {{SERVER_PORT}} --mem {{SERVER_MEMORY}}M --max {{SERVER_MEMORY}}M",
-			want: "run --ip 192.168.4.28 --port 25565 --mem 4000M --max 4000M",
+			want: "run --ip 192.168.1.10 --port 25565 --mem 4000M --max 4000M",
 		},
 		{
 			name: "whitespace inside the braces is tolerated",

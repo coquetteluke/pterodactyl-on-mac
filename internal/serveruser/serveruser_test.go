@@ -6,13 +6,13 @@ import (
 )
 
 func TestName_IsDeterministicAndShort(t *testing.T) {
-	const uuid = "ca354ffe-e0ba-4374-b560-cc15a162d697"
+	const uuid = "a1b2c3d4-0000-4000-8000-000000000001"
 
 	got := Name(uuid)
 	if got != Name(uuid) {
 		t.Fatal("the same server must always map to the same account name")
 	}
-	if want := "ptero-ca354ffe"; got != want {
+	if want := "ptero-a1b2c3d4"; got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 	// Directory Services truncates long names in some contexts, so the account
@@ -26,7 +26,7 @@ func TestName_IsDeterministicAndShort(t *testing.T) {
 }
 
 func TestName_DifferentServersDoNotCollide(t *testing.T) {
-	a := Name("ca354ffe-e0ba-4374-b560-cc15a162d697")
+	a := Name("a1b2c3d4-0000-4000-8000-000000000001")
 	b := Name("2d1a8abd-5bfb-4eb3-a5b8-787e14b8896a")
 	if a == b {
 		t.Fatalf("distinct servers produced the same account name: %q", a)
@@ -37,7 +37,7 @@ func TestCandidateUID_StaysInsideTheReservedRange(t *testing.T) {
 	// The range matters: below it are macOS's own service accounts, above it
 	// are real login users. Allocating outside it would collide with either.
 	for _, uuid := range []string{
-		"ca354ffe-e0ba-4374-b560-cc15a162d697",
+		"a1b2c3d4-0000-4000-8000-000000000001",
 		"2d1a8abd-5bfb-4eb3-a5b8-787e14b8896a",
 		"0629d6e1-c5c8-4d4a-899d-c777798f2671",
 		"",

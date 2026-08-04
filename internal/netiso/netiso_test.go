@@ -40,12 +40,12 @@ func TestAllowOutPrecedesPrivateBlock(t *testing.T) {
 		UUID:     "abc",
 		UID:      700,
 		Ports:    []int{25565},
-		AllowOut: []string{"192.168.4.40"},
+		AllowOut: []string{"192.168.1.50"},
 	}})
 	if err != nil {
 		t.Fatalf("Ruleset: %v", err)
 	}
-	allow := strings.Index(got, "pass out quick proto { tcp udp } from any to 192.168.4.40 user 700")
+	allow := strings.Index(got, "pass out quick proto { tcp udp } from any to 192.168.1.50 user 700")
 	block := strings.Index(got, "block drop out quick from any to 192.168.0.0/16 user 700")
 	if allow == -1 || block == -1 {
 		t.Fatalf("expected both an allow and a block:\n%s", got)
@@ -96,7 +96,7 @@ func TestRejectsHostnameInAllowOut(t *testing.T) {
 }
 
 func TestAcceptsCIDRInAllowOut(t *testing.T) {
-	if _, err := Ruleset([]Rule{{UUID: "abc", UID: 700, AllowOut: []string{"192.168.4.0/24"}}}); err != nil {
+	if _, err := Ruleset([]Rule{{UUID: "abc", UID: 700, AllowOut: []string{"192.168.1.0/24"}}}); err != nil {
 		t.Fatalf("expected a CIDR to be accepted: %v", err)
 	}
 }

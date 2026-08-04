@@ -561,7 +561,7 @@ system:
   network_isolation:
     enabled: true
     allow_out:
-      - 192.168.4.40      # a database on the LAN that plugins need
+      - 192.168.1.50      # a database on the LAN that plugins need
 ```
 
 pf only evaluates an anchor the main ruleset references, and macOS's stock

@@ -25,7 +25,7 @@ func TestGeneratedRulesetParses(t *testing.T) {
 	}
 
 	body, err := Ruleset([]Rule{
-		{UUID: "ca354ffe", UID: 799, Ports: []int{25565, 25575}, AllowOut: []string{"192.168.4.40", "10.1.2.0/24"}},
+		{UUID: "a1b2c3d4", UID: 799, Ports: []int{25565, 25575}, AllowOut: []string{"192.168.1.50", "10.1.2.0/24"}},
 		{UUID: "beefcafe", UID: 800, Ports: []int{25566}},
 	})
 	if err != nil {
