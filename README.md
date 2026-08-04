@@ -63,8 +63,9 @@ Pterodactyl node with no VM involved.
 
 | | upstream | this fork |
 | --- | --- | --- |
-| filesystem isolation | container per server | unix accounts per server, opt-in |
+| filesystem isolation | mount namespace per server | unix accounts + kernel sandbox, opt-in |
 | network isolation | network namespace per server | pf rules keyed on uid, opt-in |
+| process isolation | PID namespace per server | none, servers can see each other's processes |
 | memory limit | enforced by the kernel | enforced by supervision, ~1s latency |
 | CPU limit | enforced via cgroups | enforced by supervision, opt-in |
 | egg install | runs in the installer image | runs on the host (see below) |
@@ -103,6 +104,28 @@ the data directories, and prints the configuration you still need to do. Add
 You then create the node in your existing Panel and paste its config here. Set
 the node's **Daemon Port to 8443**, not 443, because an unprivileged process
 cannot bind a port below 1024.
+
+### Turning on isolation
+
+Add `-s -- --isolate` to either install mode to set up everything that stands in
+for a container: an account per server, the kernel filesystem sandbox, and
+per-server firewall rules.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/coquetteluke/pterodactyl-on-mac/main/install.sh | bash -s -- --isolate
+```
+
+This installs wings as a **LaunchDaemon running as root**, which it needs in
+order to create accounts and load pf rules, and adds the anchor lines to
+`/etc/pf.conf` (keeping a backup at `/etc/pf.conf.wings-backup`). Servers
+themselves end up less privileged than before, since each drops to its own
+account. It then prints the config keys to add, rather than editing your
+`config.yml` for you, because editing YAML from a shell script is a good way to
+corrupt it.
+
+`uninstall.sh` reverses all of it, including restoring `/etc/pf.conf`. The
+per-server accounts are kept unless you pass `--purge`, since they own your
+server files.
 
 ### Everything on one Mac
 
@@ -451,6 +474,48 @@ Two things worth knowing:
 - Existing servers are chowned on their next boot, so their files stop being
   readable by the account you normally log in as. Use SFTP or the Panel's file
   manager rather than editing them directly over ssh.
+
+## Filesystem sandbox
+
+Per-server accounts rely on unix permissions, and those are only as good as the
+permission bits actually on disk. One world-readable file, one plugin that
+writes `0644`, one operator who ran `chmod -R` to fix something, and a server
+can read what it should not.
+
+macOS has a kernel sandbox underneath the permission system, the one that
+confines App Store applications. It is reachable through `sandbox-exec`, it
+applies to a process and every child it spawns, and it is enforced regardless of
+file ownership.
+
+```yaml
+system:
+  sandbox:
+    enabled: true
+    deny:
+      - /Users/you/.ssh
+```
+
+With this on, a server is denied the contents of wings' root directory apart
+from its own data directory. That covers `config.yml` with your node token and
+every other server's files, and it holds even if the permissions do not.
+
+Unlike the other two, **this does not require root**, because it only ever takes
+access away from the process being started.
+
+Being precise about the limits, because they decide whether it is worth turning
+on:
+
+- **It is a blacklist, not a whitelist.** A deny-by-default profile would need an
+  allowance for every JDK, native library and temp directory a server might
+  touch, and would break the first time a plugin reached for something
+  unforeseen. So a confined server can still read ordinary world-readable files
+  elsewhere on the machine. What it cannot read is what you name.
+- **It is not a mount namespace.** The server still sees the host's real paths
+  and shares its PID space, so it can tell that other processes exist. It just
+  cannot read their files.
+- Path metadata inside wings' directory stays readable, because a server that
+  cannot `stat` its own parents cannot `chdir` into its own directory. Names and
+  sizes leak; contents do not.
 
 ## Network isolation
 

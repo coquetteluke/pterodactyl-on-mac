@@ -154,7 +154,18 @@ func (e *Environment) Start(ctx context.Context) error {
 		return errors.New("environment/native: stdin was not available after attaching")
 	}
 
-	cmd := exec.Command("/bin/sh", "-c", startup)
+	// Confine the process's view of the filesystem before it is spawned.
+	//
+	// This is deliberately layered under the account drop below rather than
+	// instead of it. The account stops a server reading files it has no
+	// permission for; the sandbox stops it reading files it does, which on a
+	// machine an operator also logs into is the case that actually comes up.
+	argv, err := e.sandboxCommand(dir, startup)
+	if err != nil {
+		return err
+	}
+
+	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = dir
 	cmd.Env = e.processEnvironment(dir)
 	cmd.Stdin = stdin

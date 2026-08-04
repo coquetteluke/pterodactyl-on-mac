@@ -182,6 +182,34 @@ type SystemConfiguration struct {
 		PerServer bool `yaml:"per_server" default:"false"`
 	} `yaml:"user"`
 
+	// Sandbox confines what files each server process can see, using the
+	// kernel sandbox macOS applies to App Store applications.
+	//
+	// This is the part of a container's isolation that unix accounts cannot
+	// reproduce: it holds regardless of file permissions, so a world-readable
+	// file in another server's directory stays unreadable. It applies to the
+	// process and every child it spawns.
+	//
+	// Unlike per-server accounts and network isolation this does not require
+	// root, because it only ever removes access from the process being started.
+	Sandbox struct {
+		// Enabled turns confinement on. Servers are then denied the contents of
+		// Wings' root directory apart from their own data directory, which
+		// covers config.yml and every other server's files.
+		Enabled bool `yaml:"enabled" default:"false"`
+
+		// Deny lists additional absolute paths to withhold, for secrets that
+		// live outside Wings' directory such as ssh keys.
+		//
+		// The policy denies by exception rather than by default, since a
+		// deny-by-default profile would need an allowance for every JDK and
+		// native library a server might load and would break on the first
+		// unforeseen one. A confined server can therefore still read ordinary
+		// world-readable files elsewhere; what it cannot read is anything
+		// named here.
+		Deny []string `yaml:"deny"`
+	} `yaml:"sandbox"`
+
 	// NetworkIsolation confines what each server can reach on the network.
 	//
 	// A container gets its own network namespace, so reaching the host or a

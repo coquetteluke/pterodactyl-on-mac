@@ -39,11 +39,13 @@ die()   { printf '\033[1;31m error:\033[0m %s\n' "$1" >&2; exit 1; }
 main() {
 MODE=node
 LAUNCHAGENT=0
+ISOLATE=0
 for arg in "$@"; do
   case "$arg" in
     --full|--panel) MODE=full ;;
     --node) MODE=node ;;
     --launchagent) LAUNCHAGENT=1 ;;
+    --isolate) ISOLATE=1 ;;
     -h|--help)
       # Printed inline rather than read back out of $0: when this script is
       # piped into bash there is no file to read.
@@ -63,6 +65,10 @@ Installer for Pterodactyl on Mac.
     --node          install only the wings daemon (default)
     --full          also install the Panel, MariaDB, PHP and nginx
     --launchagent   install a LaunchAgent so wings starts at login
+    --isolate       set up the isolation stack: an account per server, a
+                    filesystem sandbox, and per-server firewall rules. Runs
+                    wings as root via a LaunchDaemon, which it needs to
+                    create accounts and load pf rules.
 
 This fork removes the container boundary that upstream Wings relies on for
 isolation. It is for single-tenant machines only. See
@@ -407,6 +413,127 @@ CREDS
 
 # ---------------------------------------------------------------------------
 
+# write_wings_launchdaemon installs wings as a system service running as root.
+#
+# The isolation stack needs root for two things a LaunchAgent cannot do: create
+# the per-server accounts, and load pf rules. Servers themselves end up less
+# privileged than before, not more, since each drops to its own account.
+write_wings_launchdaemon() {
+  local plist="/Library/LaunchDaemons/${LABEL}.plist"
+  sudo tee "$plist" >/dev/null <<PLISTEOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${PREFIX}/wings</string>
+        <string>--config</string>
+        <string>${DATA_DIR}/config.yml</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- Servers inherit this PATH; whatever your startup command invokes
+             must be findable here. -->
+        <key>PATH</key>
+        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+    <key>WorkingDirectory</key>
+    <string>${DATA_DIR}</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>15</integer>
+    <key>StandardOutPath</key>
+    <string>${DATA_DIR}/logs/wings.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>${DATA_DIR}/logs/wings.stderr.log</string>
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>65536</integer>
+    </dict>
+</dict>
+</plist>
+PLISTEOF
+  sudo chown root:wheel "$plist"
+  sudo chmod 644 "$plist"
+  info "Wrote ${plist} (wings will run as root)"
+}
+
+# enable_pf_anchor makes pf evaluate the rules wings generates.
+#
+# pf ignores an anchor that nothing references, and macOS's stock pf.conf
+# references only Apple's own. Without this the rules load and quietly enforce
+# nothing, which looks exactly like success.
+enable_pf_anchor() {
+  if sudo grep -q '^anchor "wings"' /etc/pf.conf 2>/dev/null; then
+    info "pf.conf already references the wings anchor"
+    return 0
+  fi
+  # Kept alongside the file it edits so a bad edit can be undone by hand.
+  sudo cp /etc/pf.conf /etc/pf.conf.wings-backup
+  # The load directive has to follow the anchor reference, and both have to come
+  # after Apple's own rules, so they are appended rather than inserted.
+  sudo tee -a /etc/pf.conf >/dev/null <<'PFEOF'
+
+# Added by the Pterodactyl on Mac installer. Without these two lines the rules
+# wings generates are loaded but never evaluated.
+anchor "wings"
+load anchor "wings" from "/etc/pf.anchors/com.pterodactyl.wings"
+PFEOF
+  # An empty anchor file so pf.conf stays loadable before wings first writes it.
+  sudo mkdir -p /etc/pf.anchors
+  [ -f /etc/pf.anchors/com.pterodactyl.wings ] || \
+    echo "# Populated by wings on startup." | sudo tee /etc/pf.anchors/com.pterodactyl.wings >/dev/null
+
+  if ! sudo pfctl -n -f /etc/pf.conf >/dev/null 2>&1; then
+    sudo cp /etc/pf.conf.wings-backup /etc/pf.conf
+    die "the edited /etc/pf.conf does not parse; it has been restored from backup"
+  fi
+  info "Added the wings anchor to /etc/pf.conf (backup at /etc/pf.conf.wings-backup)"
+}
+
+# setup_isolation turns on everything that stands in for a container.
+setup_isolation() {
+  info "Setting up isolation"
+  sudo -v || die "--isolate needs sudo: wings must run as root to create accounts and load firewall rules"
+
+  enable_pf_anchor
+  write_wings_launchdaemon
+
+  # config.yml usually does not exist yet in node mode, since it is pasted from
+  # the Panel after the node is created. Editing YAML from a shell script is a
+  # reliable way to corrupt it, so the keys are printed rather than injected.
+  cat <<'YAMLEOF'
+
+  Add these to the `system:` block of your config.yml to switch isolation on:
+
+      system:
+        user:
+          per_server: true          # an account per server
+        sandbox:
+          enabled: true             # kernel-enforced filesystem confinement
+          deny:
+            - /Users/YOU/.ssh       # optional, anything else to withhold
+        network_isolation:
+          enabled: true             # per-server firewall rules
+          allow_out:
+            - 192.168.1.50          # any LAN host your plugins must reach,
+                                    # such as a database. Everything else on
+                                    # the LAN, and your Panel, is blocked.
+
+  Existing servers are chowned to their new accounts on the next boot, so you
+  will no longer be able to edit their files directly over ssh. Use SFTP or the
+  Panel's file manager.
+
+YAMLEOF
+}
+
 run() {
 if [ "$MODE" = full ]; then
   install_panel
@@ -414,7 +541,11 @@ fi
 
 ensure_egg_tools
 install_wings
-[ "$LAUNCHAGENT" = 1 ] && write_wings_launchagent
+[ "$ISOLATE" = 1 ] && setup_isolation
+[ "$LAUNCHAGENT" = 1 ] && [ "$ISOLATE" = 0 ] && write_wings_launchagent
+if [ "$LAUNCHAGENT" = 1 ] && [ "$ISOLATE" = 1 ]; then
+  warn "--launchagent ignored: --isolate installs a LaunchDaemon instead, since wings must run as root"
+fi
 
 if [ "$MODE" = full ]; then
   url="http://$(hostname -s).local:${PANEL_PORT}"

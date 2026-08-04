@@ -111,6 +111,8 @@ remove_wings() {
   fi
   rm -f "$HOME/Library/LaunchAgents/${LABEL}.plist"
 
+  remove_isolation
+
   # Anything still running from a previous session.
   pkill -f "${PREFIX}/wings" 2>/dev/null || true
 
@@ -118,6 +120,67 @@ remove_wings() {
     rm -f "${PREFIX}/wings"
     info "Removed ${PREFIX}/wings"
   fi
+}
+
+# remove_isolation undoes everything --isolate set up.
+#
+# All of it lives outside wings' own directory, in system locations, so none of
+# it would be removed by deleting the data directory. Left behind, the pf.conf
+# edit would keep referencing an anchor that no longer gets populated and the
+# accounts would linger as orphaned uids.
+remove_isolation() {
+  # A LaunchDaemon means wings was installed with --isolate.
+  if [ -f "/Library/LaunchDaemons/${LABEL}.plist" ]; then
+    info "Unloading the wings LaunchDaemon"
+    sudo launchctl bootout "system/${LABEL}" 2>/dev/null || true
+    sudo rm -f "/Library/LaunchDaemons/${LABEL}.plist"
+  fi
+
+  # Firewall rules. Flushing the anchor drops the rules; pf itself is left
+  # alone, since Internet Sharing and some VPNs enable it too and turning it
+  # off here would break them.
+  if sudo pfctl -s Anchors 2>/dev/null | grep -q '^  wings$'; then
+    info "Flushing the wings pf anchor"
+    sudo pfctl -a wings -F rules >/dev/null 2>&1 || true
+  fi
+  if [ -f /etc/pf.conf.wings-backup ]; then
+    info "Restoring /etc/pf.conf from the installer's backup"
+    sudo cp /etc/pf.conf.wings-backup /etc/pf.conf
+    sudo rm -f /etc/pf.conf.wings-backup
+  elif sudo grep -q '^anchor "wings"' /etc/pf.conf 2>/dev/null; then
+    # Edited by hand rather than by the installer, so remove just our lines.
+    info "Removing the wings anchor from /etc/pf.conf"
+    sudo sed -i '' -e '/^anchor "wings"$/d' \
+      -e '\|^load anchor "wings" from "/etc/pf.anchors/com.pterodactyl.wings"$|d' \
+      -e '/^# Added by the Pterodactyl on Mac installer/d' /etc/pf.conf
+  fi
+  sudo rm -f /etc/pf.anchors/com.pterodactyl.wings
+
+  remove_server_accounts
+}
+
+# remove_server_accounts deletes the per-server accounts.
+#
+# These are only removed when purging. They own the server data directories, so
+# deleting them while the data survives would leave every file owned by a uid
+# with no account behind it, and a later reinstall would allocate those uids to
+# different servers.
+remove_server_accounts() {
+  local accounts
+  accounts=$(dscl . -list /Users 2>/dev/null | grep '^ptero-' || true)
+  [ -n "$accounts" ] || return 0
+
+  if [ "$PURGE" != 1 ]; then
+    warn "Leaving $(echo "$accounts" | wc -l | tr -d ' ') per-server account(s) in place; they own your server files. Re-run with --purge to remove them."
+    return 0
+  fi
+
+  info "Removing per-server accounts"
+  echo "$accounts" | while read -r acct; do
+    [ -n "$acct" ] || continue
+    sudo dscl . -delete "/Users/${acct}" 2>/dev/null || true
+    sudo dscl . -delete "/Groups/${acct}" 2>/dev/null || true
+  done
 }
 
 remove_panel() {
