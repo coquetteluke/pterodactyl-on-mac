@@ -25,12 +25,12 @@ of Pterodactyl's security model rests on that. This fork has no containers, so:
   `config.yml` which contains the node token that authenticates to your Panel.
   This one is fixable — see [per-server accounts](#per-server-accounts) — but
   the two below are not.
-- **CPU limits are not enforced at all**, and memory limits are enforced by
-  supervision rather than by the kernel. macOS has no cgroups. Wings watches
-  memory and kills a server that stays over its limit (see
-  [resource limits](#resource-limits)), but that is a second or so slower than a
-  kernel kill, and nothing whatsoever bounds CPU. One server can still starve
-  every other server on the machine.
+- **Resource limits are enforced by supervision, not by the kernel.** macOS has
+  no cgroups. Wings can hold a server to both its memory and CPU limits (see
+  [resource limits](#resource-limits)), but it does so by watching and reacting,
+  which is slower and coarser than a kernel quota: memory is checked once a
+  second, and CPU is capped by stopping the process in short bursts. Good enough
+  to stop one server ruining a machine; not a substitute for real isolation.
 - **There is no network isolation.** Servers bind host ports directly.
 
 If you are renting servers to other people, use upstream Wings on Linux. This
@@ -65,7 +65,7 @@ Pterodactyl node with no VM involved.
 | --- | --- | --- |
 | isolation | container per server | none — plain processes |
 | memory limit | enforced by the kernel | enforced by supervision, ~1s latency |
-| CPU limit | enforced via cgroups | not enforced |
+| CPU limit | enforced via cgroups | enforced by supervision, opt-in |
 | egg install | runs in the installer image | runs on the host (see below) |
 | server user | dedicated `pterodactyl` user | the user running Wings |
 
