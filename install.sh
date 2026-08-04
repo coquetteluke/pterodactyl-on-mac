@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# Installer for wings-darwin, an unofficial macOS build of Pterodactyl Wings.
+# Installer for Pterodactyl on Mac, an unofficial macOS build of Pterodactyl Wings.
 #
-#   curl -fsSL https://raw.githubusercontent.com/coquetteluke/wings-darwin/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/coquetteluke/pterodactyl-on-mac/main/install.sh | bash
 #
 # This installs the binary and, optionally, a LaunchAgent to keep it running.
 # It does NOT write a config.yml -- that comes from your Panel, under
@@ -10,14 +10,14 @@
 #
 # Read before running: this fork removes the container boundary that upstream
 # Wings relies on for isolation. It is for single-tenant machines only. See
-# https://github.com/coquetteluke/wings-darwin#readme
+# https://github.com/coquetteluke/pterodactyl-on-mac#readme
 
 set -euo pipefail
 
-REPO="${WINGS_REPO:-coquetteluke/wings-darwin}"
+REPO="${WINGS_REPO:-coquetteluke/pterodactyl-on-mac}"
 PREFIX="${WINGS_PREFIX:-$HOME/.local/bin}"
 DATA_DIR="${WINGS_DATA_DIR:-$HOME/pterodactyl}"
-LABEL="com.github.wings-darwin"
+LABEL="com.github.pterodactyl-on-mac"
 
 info()  { printf '\033[1;34m==>\033[0m %s\n' "$1"; }
 warn()  { printf '\033[1;33m warning:\033[0m %s\n' "$1" >&2; }

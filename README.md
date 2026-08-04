@@ -1,6 +1,6 @@
 fyi this is 100% claude ai. i dont know how to code nor work github. idk if ill be actively maintaining this. submit any errors u get please. ty
 
-# wings-darwin
+# Pterodactyl on Mac
 
 An **unofficial** fork of [Pterodactyl Wings](https://github.com/pterodactyl/wings)
 that runs game servers natively on macOS, as ordinary host processes instead of
@@ -75,7 +75,7 @@ image supplies it.
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/coquetteluke/wings-darwin/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/coquetteluke/pterodactyl-on-mac/main/install.sh | bash
 ```
 
 That picks the right binary for your Mac (Apple silicon or Intel), verifies it
@@ -85,11 +85,11 @@ the data directories, and prints the configuration you still need to do. Add
 
 If piping a script into your shell makes you uneasy — reasonable — read it
 first, or just grab the binary yourself from the
-[releases page](https://github.com/coquetteluke/wings-darwin/releases):
+[releases page](https://github.com/coquetteluke/pterodactyl-on-mac/releases):
 
 ```bash
-curl -fsSLO https://github.com/coquetteluke/wings-darwin/releases/latest/download/wings_darwin_arm64
-curl -fsSL  https://github.com/coquetteluke/wings-darwin/releases/latest/download/SHA256SUMS | shasum -a 256 -c --ignore-missing
+curl -fsSLO https://github.com/coquetteluke/pterodactyl-on-mac/releases/latest/download/wings_darwin_arm64
+curl -fsSL  https://github.com/coquetteluke/pterodactyl-on-mac/releases/latest/download/SHA256SUMS | shasum -a 256 -c --ignore-missing
 chmod +x wings_darwin_arm64 && mv wings_darwin_arm64 ~/.local/bin/wings
 ```
 
