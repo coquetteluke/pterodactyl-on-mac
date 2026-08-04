@@ -66,8 +66,32 @@ func (e *Environment) Create() error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+
+	// With a dedicated account, the directory itself has to deny traversal to
+	// everyone else. Chowning the contents is not enough on its own: files
+	// created with the usual 0644 stay world-readable, so another server could
+	// still read them by walking in. Denying execute on the directory is what
+	// actually stops that.
+	e.mu.RLock()
+	account := e.meta.Account
+	e.mu.RUnlock()
+
+	mode := os.FileMode(0o755)
+	if account != nil {
+		mode = 0o750
+	}
+	if err := os.MkdirAll(dir, mode); err != nil {
 		return errors.Wrap(err, "environment/native: failed to create server directory")
+	}
+	if account != nil {
+		// MkdirAll leaves an existing directory's mode alone, so tighten it
+		// explicitly for servers that predate the account being enabled.
+		if err := os.Chmod(dir, mode); err != nil {
+			return errors.Wrap(err, "environment/native: failed to restrict server directory")
+		}
+		if err := os.Chown(dir, account.UID, account.GID); err != nil {
+			return errors.Wrap(err, "environment/native: failed to hand the server directory to its account")
+		}
 	}
 
 	return nil

@@ -334,7 +334,7 @@ func TestNativeEnvironment_RunsUnderDedicatedAccount(t *testing.T) {
 	}
 	defer os.RemoveAll(root)
 
-	e := newTestEnvironmentAt(t, root, `id -u > uid.txt; cat /private/tmp/ptero-secret-probe > stolen.txt 2>/dev/null; while :; do sleep 1; done`,
+	e := newTestEnvironmentAt(t, root, `id -u > uid.txt; cat /private/tmp/ptero-secret-probe > stolen.txt 2>/dev/null; cat ../neighbour/world.dat > peeked.txt 2>/dev/null; while :; do sleep 1; done`,
 		remote.ProcessStopConfiguration{Type: remote.ProcessStopSignal, Value: "SIGKILL"})
 	e.meta.Account = &serveruser.Account{Username: "nobody", UID: nobodyUID, GID: nobodyUID}
 
@@ -353,8 +353,8 @@ func TestNativeEnvironment_RunsUnderDedicatedAccount(t *testing.T) {
 		t.Fatalf("chown server dir: %v", err)
 	}
 
-	// A root-owned secret standing in for another server's files, or for
-	// wings' own config.yml holding the node token.
+	// A root-owned secret standing in for wings' own config.yml, which holds
+	// the node token.
 	secret := "/private/tmp/ptero-secret-probe"
 	if err := os.WriteFile(secret, []byte("node-token"), 0o600); err != nil {
 		t.Fatalf("write secret: %v", err)
@@ -362,6 +362,28 @@ func TestNativeEnvironment_RunsUnderDedicatedAccount(t *testing.T) {
 	defer os.Remove(secret)
 	if err := os.Chown(secret, 0, 0); err != nil {
 		t.Fatalf("chown secret: %v", err)
+	}
+
+	// A second server, owned by a different account, with a world-readable
+	// file inside it. This is the case chowning alone does not cover: the file
+	// is mode 0644, so only the directory's own permissions stop our server
+	// from walking in and reading it.
+	const otherUID = 1 // daemon
+	neighbour := filepath.Join(root, "servers", "neighbour")
+	if err := os.MkdirAll(neighbour, 0o750); err != nil {
+		t.Fatalf("mkdir neighbour: %v", err)
+	}
+	neighbourFile := filepath.Join(neighbour, "world.dat")
+	if err := os.WriteFile(neighbourFile, []byte("neighbour-data"), 0o644); err != nil {
+		t.Fatalf("write neighbour file: %v", err)
+	}
+	for _, p := range []string{neighbour, neighbourFile} {
+		if err := os.Chown(p, otherUID, otherUID); err != nil {
+			t.Fatalf("chown %s: %v", p, err)
+		}
+	}
+	if err := os.Chmod(neighbour, 0o750); err != nil {
+		t.Fatalf("chmod neighbour: %v", err)
 	}
 
 	if err := e.Start(context.Background()); err != nil {
@@ -382,6 +404,12 @@ func TestNativeEnvironment_RunsUnderDedicatedAccount(t *testing.T) {
 	// The root-owned secret must not have been readable.
 	if b, err := os.ReadFile(filepath.Join(dir, "stolen.txt")); err == nil && len(strings.TrimSpace(string(b))) > 0 {
 		t.Fatalf("server read a root-owned file it should not have access to: %q", b)
+	}
+
+	// Nor another server's data, even though that file is mode 0644. This is
+	// the case that chowning alone would miss.
+	if b, err := os.ReadFile(filepath.Join(dir, "peeked.txt")); err == nil && len(strings.TrimSpace(string(b))) > 0 {
+		t.Fatalf("server read a neighbouring server's file: %q", b)
 	}
 }
 
