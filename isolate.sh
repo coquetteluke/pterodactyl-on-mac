@@ -285,7 +285,7 @@ Or pass --force to stop them abruptly and revert anyway."
     while [ -n "$(running_servers)" ] && [ "$waited" -lt 30 ]; do
       sleep 1; waited=$((waited + 1))
     done
-    echo "$(running_servers)" | while read -r pid; do
+    running_servers | while read -r pid; do
       [ -n "$pid" ] || continue
       kill -9 "$pid" 2>/dev/null || true
     done

@@ -68,6 +68,15 @@ jobs:
             printf 'Opened automatically by `.github/workflows/upstream.yaml`.\n'
           } > /tmp/body.md
 
+          # gh refuses to create an issue with a label that does not exist, so
+          # this would have failed at the one moment it was needed and stayed
+          # green until then, because the job exits early while versions match.
+          # --force makes it idempotent.
+          gh label create upstream --repo "$GITHUB_REPOSITORY" \
+            --color ededed \
+            --description "Upstream Wings released a new version" \
+            --force
+
           gh issue create --repo "$GITHUB_REPOSITORY" \
             --title "Upstream Wings ${upstream} released; this fork tracks ${tracked}" \
             --label upstream \

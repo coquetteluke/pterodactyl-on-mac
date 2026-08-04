@@ -421,7 +421,6 @@ install_panel() {
   info "Starting MariaDB"
   brew services start mariadb >/dev/null 2>&1 || true
   # Give MariaDB a moment to accept connections on first start.
-  local i
   for _ in $(seq 1 30); do
     "${bp}/bin/mysqladmin" ping >/dev/null 2>&1 && break
     sleep 1
@@ -458,7 +457,8 @@ SQL
     </dev/null >/dev/null || die "composer install failed"
 
   info "Configuring the Panel"
-  local url="http://$(hostname -s).local:${PANEL_PORT}"
+  local url
+  url="http://$(hostname -s).local:${PANEL_PORT}"
   ( cd "$PANEL_DIR"
     cp -n .env.example .env
     "$php" artisan key:generate --force --no-interaction >/dev/null

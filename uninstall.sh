@@ -270,9 +270,11 @@ purge_data() {
   if command -v brew >/dev/null 2>&1; then
     bp=$(brew --prefix 2>/dev/null || true)
     if [ -n "${bp:-}" ] && [ -x "${bp}/bin/mysql" ]; then
-      "${bp}/bin/mysql" -e "DROP DATABASE IF EXISTS panel; DROP USER IF EXISTS 'pterodactyl'@'127.0.0.1';" 2>/dev/null \
-        && info "Dropped the panel database" \
-        || warn "could not drop the panel database; do it by hand if you care"
+      if "${bp}/bin/mysql" -e "DROP DATABASE IF EXISTS panel; DROP USER IF EXISTS 'pterodactyl'@'127.0.0.1';" 2>/dev/null; then
+        info "Dropped the panel database"
+      else
+        warn "could not drop the panel database; do it by hand if you care"
+      fi
     fi
   fi
 

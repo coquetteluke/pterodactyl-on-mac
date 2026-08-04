@@ -113,6 +113,10 @@ Three, each with a default you can accept by pressing enter:
 in a script or CI, the defaults are used, so isolation is on unless you pass
 `--no-isolate`.
 
+The binary is always checked against the published `SHA256SUMS`, and the install
+is refused if that check cannot be made rather than falling back to a warning.
+`--no-verify` overrides that if you have a reason to.
+
 ### Isolation
 
 On by default. It gives every server its own account, its own view of the disk
