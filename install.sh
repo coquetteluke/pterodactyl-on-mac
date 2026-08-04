@@ -172,6 +172,7 @@ case "$(uname -m)" in
   *) die "unsupported architecture: $(uname -m)" ;;
 esac
 
+adopt_existing_install || true
 interview
 run
 }
@@ -598,10 +599,53 @@ install_isolate_script() {
   info "Installing ${dest}"
 }
 
+# adopt_existing_install learns where wings actually is, rather than assuming.
+#
+# The defaults here describe a fresh install done by this script. A node set up
+# by hand, or by an older version, can have the binary somewhere else and be
+# registered under a different service label, and every management action would
+# then look at the wrong paths and report that nothing is installed.
+#
+# A launchd plist records both the binary and the config path it was given, so
+# an existing service is the most reliable description of the layout available.
+# Anything set explicitly through the environment still wins.
+adopt_existing_install() {
+  local f label prog cfg
+  for f in /Library/LaunchDaemons/*.plist "$HOME/Library/LaunchAgents/"*.plist; do
+    [ -f "$f" ] || continue
+    grep -q '<string>[^<]*/wings</string>' "$f" 2>/dev/null || continue
+
+    label=$(basename "$f" .plist)
+    prog=$(awk -F'[<>]' '/<string>[^<]*\/wings<\/string>/{print $3; exit}' "$f")
+    cfg=$(awk -F'[<>]' '/<string>[^<]*config\.yml<\/string>/{print $3; exit}' "$f")
+
+    [ -n "${WINGS_LABEL:-}" ]    || LABEL="$label"
+    if [ -z "${WINGS_PREFIX:-}" ] && [ -n "$prog" ]; then PREFIX=$(dirname "$prog"); fi
+    if [ -z "${WINGS_DATA_DIR:-}" ] && [ -n "$cfg" ]; then DATA_DIR=$(dirname "$cfg"); fi
+    return 0
+  done
+  return 1
+}
+
+# find_wings returns the path to the installed binary, or nothing.
+#
+# Deliberately not a bare command substitution at a call site: under `set -e` a
+# failing one aborts the script at the assignment, before any error message can
+# run, which is how this used to fail completely silently.
+find_wings() {
+  local c
+  for c in "${PREFIX}/wings" "$HOME/.local/bin/wings" "$HOME/bin/wings" \
+           /usr/local/bin/wings /opt/homebrew/bin/wings; do
+    if [ -x "$c" ]; then echo "$c"; return 0; fi
+  done
+  if c=$(command -v wings 2>/dev/null) && [ -n "$c" ]; then echo "$c"; return 0; fi
+  return 1
+}
+
 # wings_installed reports whether this machine already has a node on it, which
 # decides whether the first question is "what do you want" or "what now".
 wings_installed() {
-  [ -x "${PREFIX}/wings" ] || [ -f "${DATA_DIR}/config.yml" ]
+  find_wings >/dev/null 2>&1 || [ -f "${DATA_DIR}/config.yml" ]
 }
 
 # restart_wings restarts the daemon wherever it happens to be registered.
@@ -624,10 +668,17 @@ restart_wings() {
 # sessions precisely so they survive wings restarting, and the new wings adopts
 # them by pid on the way back up, so updating costs no downtime for players.
 update_wings() {
-  local before after
-  before=$("${PREFIX}/wings" version 2>/dev/null | head -1)
-  [ -n "$before" ] || die "no wings found at ${PREFIX}/wings; install it first"
-  info "Installed: ${before}"
+  local before after bin
+  # Guarded rather than assigned directly: `set -e` would otherwise abort here
+  # with no output at all when the binary is missing.
+  if ! bin=$(find_wings); then
+    die "no wings binary found. Looked in ${PREFIX}, ~/.local/bin, ~/bin, /usr/local/bin and on your PATH. Install it first."
+  fi
+  PREFIX=$(dirname "$bin")
+
+  before=$("$bin" version 2>/dev/null | head -1) || true
+  [ -n "$before" ] || die "found ${bin} but it would not run; is it the right build for this Mac?"
+  info "Installed: ${before}  (${bin})"
 
   local latest
   latest=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
@@ -647,11 +698,19 @@ update_wings() {
   # the old inode until it is restarted either way.
   install_wings
 
-  after=$("${PREFIX}/wings" version 2>/dev/null | head -1)
+  after=$("$bin" version 2>/dev/null | head -1) || true
   if restart_wings; then
     info "Restarted wings. Your game servers were not interrupted."
   else
-    warn "could not restart wings automatically; the new binary is installed but not yet running"
+    # Nearly always because sudo had nowhere to ask for a password, which is the
+    # case when this is piped from curl with no terminal attached. Say what to
+    # run rather than leaving someone to work it out.
+    warn "the new binary is installed, but wings is still running the old one"
+    if [ -f "/Library/LaunchDaemons/${LABEL}.plist" ]; then
+      printf '  Finish with:  sudo launchctl kickstart -k system/%s\n\n' "$LABEL"
+    else
+      printf '  Finish with:  launchctl kickstart -k gui/%s/%s\n\n' "$(id -u)" "$LABEL"
+    fi
   fi
 
   printf '\n'

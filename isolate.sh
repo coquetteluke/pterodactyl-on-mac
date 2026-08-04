@@ -53,6 +53,30 @@ OWNER_GID=$(id -g "$OWNER")
 OWNER_HOME=$(dscl . -read "/Users/${OWNER}" NFSHomeDirectory 2>/dev/null | awk '{print $2}')
 [ -n "$OWNER_HOME" ] || die "cannot resolve the home directory of $OWNER"
 
+# Learn the layout from whatever service is already registered, rather than
+# assuming the one this project's installer would have created. A node set up by
+# hand, or by an older version, can use a different label and different paths,
+# and assuming would make every action here report that nothing is installed.
+# The plist records both the binary and the config path it was given.
+adopt_existing_install() {
+  local f label prog cfg
+  for f in "${DAEMON_DIR}"/*.plist "${OWNER_HOME}/Library/LaunchAgents/"*.plist; do
+    [ -f "$f" ] || continue
+    grep -q '<string>[^<]*/wings</string>' "$f" 2>/dev/null || continue
+
+    label=$(basename "$f" .plist)
+    prog=$(awk -F'[<>]' '/<string>[^<]*\/wings<\/string>/{print $3; exit}' "$f")
+    cfg=$(awk -F'[<>]' '/<string>[^<]*config\.yml<\/string>/{print $3; exit}' "$f")
+
+    [ -n "${WINGS_LABEL:-}" ]    || LABEL="$label"
+    if [ -z "${WINGS_PREFIX:-}" ] && [ -n "$prog" ]; then PREFIX=$(dirname "$prog"); fi
+    if [ -z "${WINGS_DATA_DIR:-}" ] && [ -n "$cfg" ]; then DATA_DIR=$(dirname "$cfg"); fi
+    return 0
+  done
+  return 1
+}
+adopt_existing_install || true
+
 [ -n "$PREFIX" ]   || PREFIX="${OWNER_HOME}/.local/bin"
 [ -n "$DATA_DIR" ] || DATA_DIR="${OWNER_HOME}/pterodactyl"
 AGENT_PLIST="${OWNER_HOME}/Library/LaunchAgents/${LABEL}.plist"
