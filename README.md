@@ -388,13 +388,36 @@ system:
 A server with no configured limit is never killed for memory — its ceiling is
 the machine, and it was allowed to use it.
 
-### CPU — not enforced
+### CPU — enforced, off by default
 
-There is no scheduler quota to attach a process to on macOS. The only mechanism
-that would genuinely cap CPU is duty-cycling the process with SIGSTOP/SIGCONT,
-which for a game server means visible stalls for connected players. That is a
-worse outcome than the problem, so it is deliberately not implemented. The
-Panel's CPU limit is displayed and ignored.
+```yaml
+system:
+  enforce_cpu_limit: true
+```
+
+macOS has no scheduler quota, and the alternatives do not work: an unprivileged
+process can lower its own priority but not restore it, and the background QoS
+tier throttles I/O and timers while leaving compute alone -- a burner still sits
+at 99.7% of a core after `taskpolicy -b`. Stopping and continuing the process is
+what remains, and it caps accurately, within about 3% of target.
+
+The catch is that a throttled process is frozen in bursts, and for a game server
+those land inside its tick budget. So the limiter only ever throttles a server
+that is **over** its limit:
+
+- A server inside its allowance is **never signalled at all** -- not stopped,
+  not continued. It cannot tell the limiter exists.
+- Idle capacity stays usable. A cgroup quota would idle the CPU rather than lend
+  it out; here a server may use whatever is going spare until something else
+  wants it.
+- Decisions are made on usage smoothed over ~250ms, so a server is not throttled
+  for briefly spawning a helper process.
+- A single stall is bounded by the 20ms control window. Measured: a 40%-limited
+  runaway settles around 68%, and a 50%-limited one at 47% with 10ms stalls.
+
+It is off by default because on a machine running one server there is nothing to
+protect it from, and capping it can only make it slower. Turn it on when several
+servers share a machine and one of them misbehaving would ruin the others.
 
 ## Per-server accounts
 

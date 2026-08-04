@@ -276,6 +276,19 @@ type SystemConfiguration struct {
 	// for decoration.
 	EnforceMemoryLimit bool `default:"true" yaml:"enforce_memory_limit"`
 
+	// EnforceCpuLimit makes the native environment hold a server to the CPU
+	// limit configured in the Panel.
+	//
+	// macOS has no scheduler quota, so this is done by stopping and continuing
+	// the process, which caps it accurately but freezes it in short bursts
+	// while it is over its limit. A server inside its allowance is never
+	// signalled and never stalls.
+	//
+	// Off by default: on a machine running a single server there is nothing to
+	// protect it from, and capping it can only make it slower. It earns its
+	// keep when several servers share one machine.
+	EnforceCpuLimit bool `default:"false" yaml:"enforce_cpu_limit"`
+
 	// Environment selects how server processes are executed.
 	//
 	//   docker - run each server in a container (the upstream behaviour)

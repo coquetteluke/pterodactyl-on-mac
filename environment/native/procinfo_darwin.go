@@ -136,6 +136,36 @@ func pidStartTime(pid int) (time.Time, error) {
 	return time.Unix(int64(sec), int64(usec)*1000), nil
 }
 
+// SSTOP is the proc_bsdinfo status for a process stopped by a signal.
+const sstop = 4
+
+// processIsStopped reports whether a process is currently suspended.
+//
+// Used so that a resume is only ever sent to a process that actually needs it:
+// signalling one that is running would be visible to it -- SIGCONT is
+// deliverable and trappable -- and the whole point of the limiter is that a
+// server inside its allowance is never touched.
+func processIsStopped(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	buf := make([]byte, sizeBSDInfo)
+	_, _, errno := syscall.Syscall6(
+		sysProcInfo,
+		callPidInfo,
+		uintptr(pid),
+		flavorTBSDInfo,
+		0,
+		uintptr(unsafe.Pointer(&buf[0])),
+		sizeBSDInfo,
+	)
+	if errno != 0 {
+		return false
+	}
+	// pbi_status is the second uint32 of struct proc_bsdinfo.
+	return *(*uint32)(unsafe.Pointer(&buf[4])) == sstop
+}
+
 // processIsAlive reports whether a pid refers to a live process. Signal 0
 // performs the permission and existence checks without delivering anything.
 func processIsAlive(pid int) bool {

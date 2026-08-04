@@ -31,7 +31,7 @@ func (e *Environment) pollResources(ctx context.Context) error {
 	defer e.log().Debug("stopped resource polling for process")
 
 	var (
-		lastCPU  uint64
+		lastCPU  map[int]uint64
 		lastTime time.Time
 		// over counts consecutive samples above the memory limit. Acting on a
 		// single sample would kill a server for a momentary spike, which the
@@ -56,7 +56,7 @@ func (e *Environment) pollResources(ctx context.Context) error {
 			return nil
 		}
 
-		resident, cpuNS, err := e.sampleGroup(pid)
+		resident, cpuNow, err := e.sampleGroup(pid)
 		if err != nil {
 			// The process exiting mid-sample is entirely normal; anything else
 			// is worth surfacing once rather than every second.
@@ -69,16 +69,16 @@ func (e *Environment) pollResources(ctx context.Context) error {
 
 		now := time.Now()
 		var cpuAbsolute float64
-		if !lastTime.IsZero() && cpuNS >= lastCPU {
+		if !lastTime.IsZero() {
 			elapsed := now.Sub(lastTime).Nanoseconds()
 			if elapsed > 0 {
 				// 100.0 represents one fully saturated core, which is the same
 				// scale the Docker environment reports on.
-				cpuAbsolute = float64(cpuNS-lastCPU) / float64(elapsed) * 100
+				cpuAbsolute = float64(cpuDelta(lastCPU, cpuNow)) / float64(elapsed) * 100
 				cpuAbsolute = math.Round(cpuAbsolute*1000) / 1000
 			}
 		}
-		lastCPU, lastTime = cpuNS, now
+		lastCPU, lastTime = cpuNow, now
 
 		uptime, err := e.Uptime(ctx)
 		if err != nil {
@@ -146,16 +146,44 @@ func (e *Environment) killForMemory(resident, limit uint64) {
 	}
 }
 
-// sampleGroup totals resident memory and cumulative CPU time across every
-// process in the server's process group.
-func (e *Environment) sampleGroup(pid int) (resident uint64, cpuNS uint64, err error) {
+// cpuDelta returns the CPU consumed between two samples of a process group.
+//
+// Summing each member's cumulative counter and differencing the totals is
+// wrong whenever the membership changes: a process that exits takes its
+// lifetime CPU out of the sum, so the total can jump backwards, and the next
+// process to appear makes it jump forwards. A server that spawns helpers --
+// which is most of them -- produces wild readings that way, and a limiter
+// acting on those would throttle a server that had done nothing wrong.
+//
+// Differencing per process instead keeps every reading sane. A process that
+// exited between samples contributes nothing for its final slice, which
+// slightly under-counts; that is much preferable to spikes that cause spurious
+// throttling.
+func cpuDelta(prev, cur map[int]uint64) uint64 {
+	var delta uint64
+	for pid, now := range cur {
+		if before, ok := prev[pid]; ok {
+			if now > before {
+				delta += now - before
+			}
+			continue
+		}
+		// First time this process has been seen; all of its CPU is new to us.
+		delta += now
+	}
+	return delta
+}
+
+// sampleGroup returns the resident memory of the server's process group and
+// each member's cumulative CPU time, keyed by pid.
+func (e *Environment) sampleGroup(pid int) (resident uint64, cpu map[int]uint64, err error) {
 	pids, lerr := pidsInGroup(pid)
 	if lerr != nil || len(pids) == 0 {
 		// Fall back to the group leader alone.
 		pids = []int{pid}
 	}
 
-	var sampled int
+	cpu = make(map[int]uint64, len(pids))
 	for _, p := range pids {
 		ti, terr := pidTaskInfo(p)
 		if terr != nil {
@@ -164,14 +192,13 @@ func (e *Environment) sampleGroup(pid int) (resident uint64, cpuNS uint64, err e
 			continue
 		}
 		resident += ti.ResidentSize
-		cpuNS += ti.TotalUser + ti.TotalSystem
-		sampled++
+		cpu[p] = ti.TotalUser + ti.TotalSystem
 	}
 
-	if sampled == 0 {
-		return 0, 0, errors.New("environment/native: no processes in group could be sampled")
+	if len(cpu) == 0 {
+		return 0, nil, errors.New("environment/native: no processes in group could be sampled")
 	}
-	return resident, cpuNS, nil
+	return resident, cpu, nil
 }
 
 // memoryLimit reports the memory ceiling for this server, including the same

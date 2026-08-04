@@ -37,6 +37,8 @@ func pidStartTime(pid int) (time.Time, error) {
 	return time.Time{}, errUnsupportedPlatform
 }
 
+func processIsStopped(pid int) bool { return false }
+
 func processIsAlive(pid int) bool {
 	if pid <= 0 {
 		return false

@@ -6,7 +6,9 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -627,6 +629,188 @@ func TestNativeEnvironment_PartialFinalLineIsFlushed(t *testing.T) {
 		}
 		return false
 	})
+}
+
+// setCPULimit configures a server's CPU allowance and switches enforcement on.
+func setCPULimit(t *testing.T, e *Environment, limit int64, enforce bool) {
+	t.Helper()
+	e.Configuration.SetSettings(environment.Settings{
+		Mounts: e.Configuration.Mounts(),
+		Limits: environment.Limits{MemoryLimit: 128, CpuLimit: limit},
+	})
+	cfg := config.Get()
+	cfg.System.EnforceCpuLimit = enforce
+	config.Set(cfg)
+	t.Cleanup(func() {
+		c := config.Get()
+		c.System.EnforceCpuLimit = false
+		config.Set(c)
+	})
+}
+
+// throttleReporter is a server that announces every time it is resumed. A
+// process cannot catch SIGSTOP, but it can catch the SIGCONT that must follow,
+// so this reports each throttle the limiter applies.
+const throttleReporter = `trap 'echo THROTTLED' CONT; `
+
+func countThrottles(mu *sync.Mutex, lines *[]string) int {
+	mu.Lock()
+	defer mu.Unlock()
+	n := 0
+	for _, l := range *lines {
+		if strings.Contains(l, "THROTTLED") {
+			n++
+		}
+	}
+	return n
+}
+
+func collectConsole(e *Environment) (*sync.Mutex, *[]string) {
+	var mu sync.Mutex
+	lines := []string{}
+	e.SetLogCallback(func(b []byte) {
+		mu.Lock()
+		defer mu.Unlock()
+		lines = append(lines, string(b))
+	})
+	return &mu, &lines
+}
+
+// The guarantee the whole design rests on: a server inside its allowance is
+// never signalled. If this ever fails, the limiter is inflicting tick stalls on
+// a server that was behaving, which is worse than not limiting at all.
+func TestCPULimit_CompliantServerIsNeverThrottled(t *testing.T) {
+	// Sleeps almost all the time, so it uses a fraction of a core against an
+	// allowance of one and a half.
+	e := newTestEnvironment(t, throttleReporter+`while :; do sleep 0.02; done`,
+		remote.ProcessStopConfiguration{Type: remote.ProcessStopSignal, Value: "SIGKILL"})
+	setCPULimit(t, e, 150, true)
+
+	mu, lines := collectConsole(e)
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitFor(t, "process to be running", func() bool {
+		ok, _ := e.IsRunning(context.Background())
+		return ok
+	})
+
+	time.Sleep(3 * time.Second)
+
+	if n := countThrottles(mu, lines); n != 0 {
+		t.Fatalf("a server under its CPU limit was throttled %d times; it must never be signalled", n)
+	}
+}
+
+// A server with no configured limit is unlimited and must also never be
+// touched, however much CPU it uses.
+func TestCPULimit_UnlimitedServerIsNeverThrottled(t *testing.T) {
+	e := newTestEnvironment(t, throttleReporter+`a=0; while :; do a=$((a+1)); done`,
+		remote.ProcessStopConfiguration{Type: remote.ProcessStopSignal, Value: "SIGKILL"})
+	setCPULimit(t, e, 0, true) // 0 == unlimited
+
+	mu, lines := collectConsole(e)
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	time.Sleep(2 * time.Second)
+
+	if n := countThrottles(mu, lines); n != 0 {
+		t.Fatalf("an unlimited server was throttled %d times", n)
+	}
+}
+
+// And nothing happens at all when enforcement is switched off, which is the
+// default.
+func TestCPULimit_DisabledByDefault(t *testing.T) {
+	e := newTestEnvironment(t, throttleReporter+`a=0; while :; do a=$((a+1)); done`,
+		remote.ProcessStopConfiguration{Type: remote.ProcessStopSignal, Value: "SIGKILL"})
+	setCPULimit(t, e, 25, false) // over its limit, but enforcement off
+
+	mu, lines := collectConsole(e)
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	time.Sleep(2 * time.Second)
+
+	if n := countThrottles(mu, lines); n != 0 {
+		t.Fatalf("enforcement is off, yet the server was throttled %d times", n)
+	}
+}
+
+// The other half: a server that is genuinely over its limit is brought back to
+// it. Without this the feature would be safe but pointless.
+func TestCPULimit_RunawayServerIsHeldToItsLimit(t *testing.T) {
+	e := newTestEnvironment(t, `a=0; while :; do a=$((a+1)); done`,
+		remote.ProcessStopConfiguration{Type: remote.ProcessStopSignal, Value: "SIGKILL"})
+	const limit = 40 // percent of one core
+	setCPULimit(t, e, limit, true)
+
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitFor(t, "process to be running", func() bool {
+		ok, _ := e.IsRunning(context.Background())
+		return ok
+	})
+
+	// Let the controller settle, then measure over a window.
+	time.Sleep(1500 * time.Millisecond)
+	pid := e.currentPid()
+
+	before, err := pidTaskInfo(pid)
+	if err != nil {
+		t.Fatalf("sample: %v", err)
+	}
+	start := time.Now()
+	time.Sleep(3 * time.Second)
+	after, err := pidTaskInfo(pid)
+	if err != nil {
+		t.Fatalf("sample: %v", err)
+	}
+
+	used := (after.TotalUser + after.TotalSystem) - (before.TotalUser + before.TotalSystem)
+	usage := float64(used) / float64(time.Since(start).Nanoseconds()) * 100
+	t.Logf("held at %.1f%% against a %d%% limit", usage, limit)
+
+	// Generous bounds: this is a sampled feedback loop on a shared machine, not
+	// a kernel quota. The point is that an unbounded burner was brought near
+	// its limit rather than left at 100%.
+	if usage > limit*2 {
+		t.Fatalf("server ran at %.1f%%, far above its %d%% limit", usage, limit)
+	}
+	if usage < 5 {
+		t.Fatalf("server ran at %.1f%%, which suggests it was throttled to a standstill", usage)
+	}
+}
+
+// Throttling must never leave a server stopped once enforcement ends.
+func TestCPULimit_ServerIsLeftRunningWhenLimiterStops(t *testing.T) {
+	e := newTestEnvironment(t, `a=0; while :; do a=$((a+1)); done`,
+		remote.ProcessStopConfiguration{Type: remote.ProcessStopSignal, Value: "SIGKILL"})
+	setCPULimit(t, e, 10, true)
+
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitFor(t, "process to be running", func() bool {
+		ok, _ := e.IsRunning(context.Background())
+		return ok
+	})
+	pid := e.currentPid()
+	time.Sleep(1 * time.Second)
+
+	// Tearing down the console tears down the limiter with it.
+	e.detach()
+	time.Sleep(500 * time.Millisecond)
+
+	out, err := exec.Command("ps", "-o", "state=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		t.Fatalf("ps: %v", err)
+	}
+	if state := strings.TrimSpace(string(out)); strings.HasPrefix(state, "T") {
+		t.Fatalf("server was left stopped (state %q) after the limiter shut down", state)
+	}
 }
 
 func TestNativeEnvironment_StatsReflectRealUsage(t *testing.T) {

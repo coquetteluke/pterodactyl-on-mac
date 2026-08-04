@@ -184,6 +184,10 @@ func (e *Environment) Attach(ctx context.Context) error {
 			}
 		}()
 
+		// Holds the server to its CPU limit, if one is configured and
+		// enforcement is switched on. Returns immediately otherwise.
+		go e.enforceCPULimit(pollCtx)
+
 		if err := e.tailConsole(pollCtx); err != nil && !errors.Is(err, context.Canceled) {
 			e.log().WithField("error", err).Warn("error while streaming console output")
 		}
