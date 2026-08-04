@@ -4,8 +4,8 @@ An **unofficial** fork of [Pterodactyl Wings](https://github.com/pterodactyl/win
 that runs game servers natively on macOS, as ordinary host processes instead of
 Docker containers.
 
-Not affiliated with or endorsed by the Pterodactyl project. Forked from Wings
-**v1.13.1**.
+Not affiliated with or endorsed by the Pterodactyl project. Tracking Wings
+**v1.13.2**.
 
 ---
 
