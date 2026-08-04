@@ -68,6 +68,17 @@ jobs:
         run: |
           go test -race $(go list ./...)
 
+      # Per-server accounts can only be exercised as root, since dropping a
+      # process to another user is a privileged operation. Without this the
+      # isolation test silently skips and the feature is never actually proven.
+      - name: go test (privileged)
+        if: ${{ matrix.goos == 'darwin' && matrix.goarch == 'arm64' }}
+        env:
+          CGO_ENABLED: 0
+        run: |
+          go test -c -o /tmp/native.test ./environment/native/
+          sudo /tmp/native.test -test.run 'DedicatedAccount' -test.v
+
       - name: Upload Release Artifact
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'pull_request' }}

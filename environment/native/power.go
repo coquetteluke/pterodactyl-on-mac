@@ -131,6 +131,27 @@ func (e *Environment) Start(ctx context.Context) error {
 		Setsid: true,
 	}
 
+	// Drop to this server's own account when one is configured, so that unix
+	// permissions keep it away from other servers' files and from wings'
+	// config.yml, which holds the node token.
+	//
+	// stdin, stdout and stderr are inherited file descriptors, so the server
+	// needs no permission on the FIFO or the log file itself; only its data
+	// directory has to be readable, and the filesystem layer owns that.
+	e.mu.RLock()
+	account := e.meta.Account
+	e.mu.RUnlock()
+	if account != nil {
+		if os.Geteuid() != 0 {
+			return errors.New("environment/native: per-server accounts require wings to run as root")
+		}
+		cmd.SysProcAttr.Credential = &syscall.Credential{
+			Uid: uint32(account.UID),
+			Gid: uint32(account.GID),
+		}
+		e.log().WithField("account", account.String()).Debug("running server under its own account")
+	}
+
 	if err := cmd.Start(); err != nil {
 		return errors.Wrap(err, "environment/native: failed to start process")
 	}

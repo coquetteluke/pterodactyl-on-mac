@@ -39,6 +39,7 @@ import (
 	"github.com/pterodactyl/wings/config"
 	"github.com/pterodactyl/wings/environment"
 	"github.com/pterodactyl/wings/events"
+	"github.com/pterodactyl/wings/internal/serveruser"
 	"github.com/pterodactyl/wings/remote"
 	"github.com/pterodactyl/wings/system"
 )
@@ -51,6 +52,14 @@ type Metadata struct {
 
 	// Stop describes how the Panel wants this server stopped.
 	Stop remote.ProcessStopConfiguration
+
+	// Account is the dedicated operating system account this server runs as,
+	// or nil to run it as whoever Wings runs as.
+	//
+	// Without containers, servers sharing a uid can read each other's files and
+	// Wings' own config.yml. A per-server account restores that boundary using
+	// ordinary unix permissions. Setting it requires Wings to run as root.
+	Account *serveruser.Account
 }
 
 // Ensure that the native environment is always implementing all the methods
@@ -129,9 +138,9 @@ func (e *Environment) runtimeDir() string {
 	return filepath.Join(config.Get().System.RootDirectory, "native", e.Id)
 }
 
-func (e *Environment) logPath() string   { return filepath.Join(e.runtimeDir(), "console.log") }
-func (e *Environment) fifoPath() string  { return filepath.Join(e.runtimeDir(), "stdin") }
-func (e *Environment) pidPath() string   { return filepath.Join(e.runtimeDir(), "pid") }
+func (e *Environment) logPath() string  { return filepath.Join(e.runtimeDir(), "console.log") }
+func (e *Environment) fifoPath() string { return filepath.Join(e.runtimeDir(), "stdin") }
+func (e *Environment) pidPath() string  { return filepath.Join(e.runtimeDir(), "pid") }
 
 // workingDir returns the server's data directory.
 //

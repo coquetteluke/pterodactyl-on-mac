@@ -19,6 +19,7 @@ import (
 	"github.com/pterodactyl/wings/environment"
 	"github.com/pterodactyl/wings/environment/docker"
 	"github.com/pterodactyl/wings/environment/native"
+	"github.com/pterodactyl/wings/internal/serveruser"
 	"github.com/pterodactyl/wings/remote"
 	"github.com/pterodactyl/wings/server/filesystem"
 )
@@ -197,7 +198,15 @@ func (m *Manager) InitServer(data remote.ServerConfigurationResponse) (*Server, 
 		return nil, errors.WithStackIf(err)
 	}
 
-	s.fs, err = filesystem.New(filepath.Join(config.Get().System.Data, s.ID()), s.DiskSpace(), s.Config().Egg.FileDenylist)
+	// Work out which account owns this server's files. With per-server accounts
+	// that is a uid unique to this server, which is what stops one server from
+	// reading another's data; otherwise it is the single system-wide user.
+	owner, account, err := resolveServerOwner(s.ID())
+	if err != nil {
+		return nil, errors.WithStackIf(err)
+	}
+
+	s.fs, err = filesystem.New(filepath.Join(config.Get().System.Data, s.ID()), s.DiskSpace(), s.Config().Egg.FileDenylist, owner)
 	if err != nil {
 		return nil, errors.WithStackIf(err)
 	}
@@ -216,7 +225,8 @@ func (m *Manager) InitServer(data remote.ServerConfigurationResponse) (*Server, 
 	var env environment.ProcessEnvironment
 	if config.UseNativeEnvironment() {
 		env, err = native.New(s.ID(), &native.Metadata{
-			Image: s.Config().Container.Image,
+			Image:   s.Config().Container.Image,
+			Account: account,
 		}, envCfg)
 	} else {
 		env, err = docker.New(s.ID(), &docker.Metadata{
@@ -285,4 +295,32 @@ func (m *Manager) init(ctx context.Context) error {
 	log.WithField("duration", fmt.Sprintf("%s", diff)).Info("finished processing server configurations")
 
 	return nil
+}
+
+// resolveServerOwner determines which operating system account a server's files
+// and process belong to.
+//
+// With per-server accounts disabled this is the single system-wide user, which
+// is what upstream Wings uses for every container. With them enabled each
+// server gets a dedicated uid so that unix permissions keep servers apart, in
+// place of the isolation containers would otherwise provide.
+//
+// The returned account is nil when the feature is off, which tells the native
+// environment to run the server as whoever Wings runs as.
+func resolveServerOwner(uuid string) (filesystem.Owner, *serveruser.Account, error) {
+	cfg := config.Get()
+	if !cfg.System.User.PerServer {
+		return filesystem.DefaultOwner(), nil, nil
+	}
+	if !config.UseNativeEnvironment() {
+		// Docker already isolates servers from each other; per-server accounts
+		// would only complicate that without adding anything.
+		return filesystem.DefaultOwner(), nil, nil
+	}
+
+	acct, err := serveruser.Ensure(uuid)
+	if err != nil {
+		return filesystem.Owner{}, nil, errors.WrapIf(err, "server: could not provision a dedicated account for this server")
+	}
+	return filesystem.Owner{UID: acct.UID, GID: acct.GID}, &acct, nil
 }

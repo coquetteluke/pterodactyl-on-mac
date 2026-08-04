@@ -171,6 +171,15 @@ type SystemConfiguration struct {
 
 		Uid int `yaml:"uid"`
 		Gid int `yaml:"gid"`
+
+		// PerServer gives every server its own operating system account, so
+		// that servers cannot read each other's files or Wings' own config.yml.
+		//
+		// This only applies to the native environment, where there are no
+		// containers to provide that isolation. It requires Wings to run as
+		// root, since only root can change a process's user, and it does not
+		// restore resource limits -- there is no cgroup equivalent on darwin.
+		PerServer bool `yaml:"per_server" default:"false"`
 	} `yaml:"user"`
 
 	// Passwd controls the mounting of a generated passwd files into containers started by Wings.

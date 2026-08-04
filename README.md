@@ -19,10 +19,12 @@ multi-tenant hosting.**
 Upstream Wings runs every server in its own Docker container, and a great deal
 of Pterodactyl's security model rests on that. This fork has no containers, so:
 
-- **Servers are not isolated from each other or from the host.** Every server
-  process runs as the same user, with that user's full filesystem access. One
-  server can read and modify another server's files, and can read `config.yml`
-  which contains the node token that authenticates to your Panel.
+- **Servers are not isolated from each other or from the host** by default.
+  Every server process runs as the same user, with that user's full filesystem
+  access. One server can read and modify another server's files, and can read
+  `config.yml` which contains the node token that authenticates to your Panel.
+  This one is fixable — see [per-server accounts](#per-server-accounts) — but
+  the two below are not.
 - **Resource limits are advisory only.** macOS has no cgroups. The memory and
   CPU values from the Panel are reported back for display but nothing enforces
   them. For a JVM server, the `-Xmx` flag in the startup command is the real
@@ -131,6 +133,38 @@ config keeps its current behaviour with no change.
 
 Pick a data directory your user can write to. `/var/lib/pterodactyl`, the
 upstream default, needs root.
+
+## Per-server accounts
+
+Containers give upstream Wings two things: isolation and resource limits. The
+isolation half can be recovered without them, the pre-container way, by giving
+each server its own operating system account so that ordinary unix permissions
+keep them apart.
+
+```yaml
+system:
+  user:
+    per_server: true
+```
+
+With this on, Wings provisions a hidden account per server (`ptero-<uuid8>`, no
+shell, no home, uid allocated from 700-999), chowns that server's data directory
+to it, and drops to that account when spawning the process. A server can then no
+longer read another server's files, or `config.yml` with your node token.
+
+It requires **Wings to run as root**, since only root may change a process's
+user, so it needs a LaunchDaemon rather than a LaunchAgent. Servers themselves
+still run unprivileged — more so than before, in fact.
+
+Two things worth knowing:
+
+- **This does not make the node safe for multi-tenant hosting.** There are still
+  no resource limits, so one server can exhaust the machine's memory and take
+  every other server down with it. Filesystem isolation without resource
+  isolation is not enough to rent servers to strangers.
+- Existing servers are chowned on their next boot, so their files stop being
+  readable by the account you normally log in as. Use SFTP or the Panel's file
+  manager rather than editing them directly over ssh.
 
 ## macOS gotcha: Local Network permission
 

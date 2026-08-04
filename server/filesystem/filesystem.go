@@ -30,11 +30,25 @@ type Filesystem struct {
 	diskCheckInterval time.Duration
 	denylist          *ignore.GitIgnore
 
+	// owner is the account that should own this server's files. It is normally
+	// the single system-wide server user, but with per-server accounts enabled
+	// each server owns its files as a different uid, which is what keeps one
+	// server from reading another's data.
+	owner Owner
+
 	isTest bool
 }
 
-// New creates a new Filesystem instance for a given server.
-func New(root string, size int64, denylist []string) (*Filesystem, error) {
+// Owner identifies the account a server's files belong to.
+type Owner struct {
+	UID int
+	GID int
+}
+
+// New creates a new Filesystem instance for a given server. The owner is the
+// account the server's files are chowned to; pass DefaultOwner for the
+// system-wide user.
+func New(root string, size int64, denylist []string, owner Owner) (*Filesystem, error) {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return nil, err
 	}
@@ -46,11 +60,18 @@ func New(root string, size int64, denylist []string) (*Filesystem, error) {
 
 	return &Filesystem{
 		unixFS: quota,
+		owner:  owner,
 
 		diskCheckInterval: time.Duration(config.Get().System.DiskCheckInterval),
 		lastLookupTime:    &usageLookupTime{},
 		denylist:          ignore.CompileIgnoreLines(denylist...),
 	}, nil
+}
+
+// DefaultOwner returns the system-wide server user configured for this node.
+func DefaultOwner() Owner {
+	c := config.Get()
+	return Owner{UID: c.System.User.Uid, GID: c.System.User.Gid}
 }
 
 // Path returns the root path for the Filesystem instance.
@@ -225,9 +246,7 @@ func (fs *Filesystem) chownFile(name string) error {
 		return nil
 	}
 
-	uid := config.Get().System.User.Uid
-	gid := config.Get().System.User.Gid
-	return fs.unixFS.Lchown(name, uid, gid)
+	return fs.unixFS.Lchown(name, fs.owner.UID, fs.owner.GID)
 }
 
 // mkdirAll creates the directory p along with any missing parents, chowning
@@ -255,8 +274,8 @@ func (fs *Filesystem) Chown(p string) error {
 		return nil
 	}
 
-	uid := config.Get().System.User.Uid
-	gid := config.Get().System.User.Gid
+	uid := fs.owner.UID
+	gid := fs.owner.GID
 
 	dirfd, name, closeFd, err := fs.unixFS.SafePath(p)
 	defer closeFd()
@@ -390,7 +409,7 @@ func (fs *Filesystem) Copy(p string) error {
 	fs.unixFS.Add(n)
 
 	if !fs.isTest {
-		if err := fs.unixFS.Lchownat(dirfd, newName, config.Get().System.User.Uid, config.Get().System.User.Gid); err != nil {
+		if err := fs.unixFS.Lchownat(dirfd, newName, fs.owner.UID, fs.owner.GID); err != nil {
 			return err
 		}
 	}

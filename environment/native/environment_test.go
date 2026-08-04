@@ -14,6 +14,7 @@ import (
 
 	"github.com/pterodactyl/wings/config"
 	"github.com/pterodactyl/wings/environment"
+	"github.com/pterodactyl/wings/internal/serveruser"
 	"github.com/pterodactyl/wings/remote"
 
 	"golang.org/x/sys/unix"
@@ -25,8 +26,12 @@ import (
 // process group signalling and exit reporting.
 func newTestEnvironment(t *testing.T, startup string, stop remote.ProcessStopConfiguration) *Environment {
 	t.Helper()
+	return newTestEnvironmentAt(t, t.TempDir(), startup, stop)
+}
 
-	root := t.TempDir()
+func newTestEnvironmentAt(t *testing.T, root, startup string, stop remote.ProcessStopConfiguration) *Environment {
+	t.Helper()
+
 	serverDir := filepath.Join(root, "servers", "test")
 	if err := os.MkdirAll(serverDir, 0o755); err != nil {
 		t.Fatalf("mkdir server dir: %v", err)
@@ -305,6 +310,78 @@ func TestNativeEnvironment_StalePidIsNotTrusted(t *testing.T) {
 	}
 	if running, _ := e.IsRunning(context.Background()); running {
 		t.Fatal("a recycled pid should not be reported as the server running")
+	}
+}
+
+// The whole point of a per-server account is that the server process actually
+// runs as it, and therefore cannot read files belonging to another server.
+// Verifying that needs root, so this is skipped for an ordinary `go test` and
+// is the reason the suite is also run under sudo in CI.
+func TestNativeEnvironment_RunsUnderDedicatedAccount(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("changing a process's user requires root")
+	}
+
+	// "nobody" stands in for a provisioned per-server account so the test does
+	// not have to create and tear down a real one.
+	const nobodyUID = 4294967294 // (uid_t)-2
+
+	// t.TempDir() is 0700 and root-owned, which the dropped-privilege process
+	// cannot even traverse into, so use a path it can reach.
+	root, err := os.MkdirTemp("/private/tmp", "ptero-iso")
+	if err != nil {
+		t.Fatalf("temp root: %v", err)
+	}
+	defer os.RemoveAll(root)
+
+	e := newTestEnvironmentAt(t, root, `id -u > uid.txt; cat /private/tmp/ptero-secret-probe > stolen.txt 2>/dev/null; while :; do sleep 1; done`,
+		remote.ProcessStopConfiguration{Type: remote.ProcessStopSignal, Value: "SIGKILL"})
+	e.meta.Account = &serveruser.Account{Username: "nobody", UID: nobodyUID, GID: nobodyUID}
+
+	dir, err := e.workingDir()
+	if err != nil {
+		t.Fatalf("working dir: %v", err)
+	}
+	for _, p := range []string{root, filepath.Dir(dir)} {
+		if err := os.Chmod(p, 0o755); err != nil {
+			t.Fatalf("chmod %s: %v", p, err)
+		}
+	}
+	// The account has to be able to write in its own data directory, which is
+	// what the filesystem layer's chown does in production.
+	if err := os.Chown(dir, nobodyUID, nobodyUID); err != nil {
+		t.Fatalf("chown server dir: %v", err)
+	}
+
+	// A root-owned secret standing in for another server's files, or for
+	// wings' own config.yml holding the node token.
+	secret := "/private/tmp/ptero-secret-probe"
+	if err := os.WriteFile(secret, []byte("node-token"), 0o600); err != nil {
+		t.Fatalf("write secret: %v", err)
+	}
+	defer os.Remove(secret)
+	if err := os.Chown(secret, 0, 0); err != nil {
+		t.Fatalf("chown secret: %v", err)
+	}
+
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	uidFile := filepath.Join(dir, "uid.txt")
+	waitFor(t, "the server to report its uid", func() bool {
+		b, err := os.ReadFile(uidFile)
+		return err == nil && strings.TrimSpace(string(b)) != ""
+	})
+
+	b, _ := os.ReadFile(uidFile)
+	if got := strings.TrimSpace(string(b)); got != "4294967294" {
+		t.Fatalf("server ran as uid %q, expected it to drop to nobody", got)
+	}
+
+	// The root-owned secret must not have been readable.
+	if b, err := os.ReadFile(filepath.Join(dir, "stolen.txt")); err == nil && len(strings.TrimSpace(string(b))) > 0 {
+		t.Fatalf("server read a root-owned file it should not have access to: %q", b)
 	}
 }
 
