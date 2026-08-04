@@ -115,17 +115,40 @@ per-server firewall rules.
 curl -fsSL https://raw.githubusercontent.com/coquetteluke/pterodactyl-on-mac/main/install.sh | bash -s -- --isolate
 ```
 
-This installs wings as a **LaunchDaemon running as root**, which it needs in
-order to create accounts and load pf rules, and adds the anchor lines to
-`/etc/pf.conf` (keeping a backup at `/etc/pf.conf.wings-backup`). Servers
-themselves end up less privileged than before, since each drops to its own
-account. It then prints the config keys to add, rather than editing your
-`config.yml` for you, because editing YAML from a shell script is a good way to
-corrupt it.
+That switches on all three layers, moves wings to a **LaunchDaemon running as
+root** so it can create accounts and load firewall rules, and adds the anchor
+lines to `/etc/pf.conf` (backing the original up to `/etc/pf.conf.wings-backup`,
+and restoring it automatically if the edit does not parse). Servers themselves
+end up less privileged than before, since each drops to its own account.
 
-`uninstall.sh` reverses all of it, including restoring `/etc/pf.conf`. The
-per-server accounts are kept unless you pass `--purge`, since they own your
-server files.
+Then restart your servers from the Panel. Each one picks up its account, its
+sandbox and its firewall rules on its next boot.
+
+If your Panel lives on another machine, `config.yml` does not exist until you
+have created the node and pasted its configuration in. The installer notices
+that and leaves you a command to run once you have:
+
+```bash
+sudo ~/.local/bin/pterodactyl-isolate
+```
+
+That is the same script, so you can also use it to turn isolation on later, on a
+node that is already running.
+
+To undo it:
+
+```bash
+sudo ~/.local/bin/pterodactyl-isolate --revert
+```
+
+which hands the server files back, deletes the accounts, drops the firewall
+rules, restores `/etc/pf.conf` and puts wings back to running as you. It refuses
+while servers are still running, because changing who owns their files
+underneath them leaves them unable to write their own worlds; stop them first,
+or pass `--force`.
+
+`uninstall.sh` reverses all of it too. Per-server accounts are kept unless you
+pass `--purge`, since they own your server files.
 
 ### Everything on one Mac
 
