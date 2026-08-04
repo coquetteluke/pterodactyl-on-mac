@@ -1,3 +1,10 @@
+# Upstream's Dockerfile, kept unchanged and still working.
+#
+# This fork exists because macOS cannot run Linux containers, so nothing here is
+# used on a Mac. It is retained because the Linux side of this tree is untouched
+# and still builds and runs exactly as upstream does; removing it would break
+# that for no reason. Same goes for docker-compose.example.yml.
+#
 # Stage 1 (Build)
 FROM golang:1.24.11-alpine AS builder
 

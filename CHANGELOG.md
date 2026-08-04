@@ -1,5 +1,19 @@
 # Changelog
 
+## This fork
+
+Releases of **Pterodactyl on Mac** are listed on the
+[releases page](https://github.com/coquetteluke/pterodactyl-on-mac/releases),
+which is where the notes for each tagged version live. Tags are of the form
+`v1.13.2-mac.N`, where the first part is the upstream Wings version being
+tracked and `N` counts releases of this fork against it.
+
+Everything below this line is upstream Pterodactyl Wings' changelog, kept for
+the history of the code this is built on. It ends at the last release upstream
+wrote an entry for and does not describe any change made in this fork.
+
+---
+
 ## v1.12.3
 ### Fixed
 * Support properly restricting configuration in egg templating

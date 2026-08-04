@@ -47,84 +47,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Written to a file rather than passed inline: the notes contain
-          # backticks and $-signs that would otherwise need escaping twice, once
-          # for YAML and once for the shell.
-          cat > /tmp/notes.md <<'NOTES'
-          Unofficial macOS build of Pterodactyl Wings, which runs game servers as
-          host processes because macOS cannot run Linux containers.
-
-          ## Which one do I want?
-
-          **Just this Mac as a node.** You already have a Panel somewhere else, on a
-          Raspberry Pi or another machine on your network, and you want this Mac to
-          run game servers for it. This installs only the daemon.
-
-          ```
-          curl -fsSL https://raw.githubusercontent.com/__REPO__/main/install.sh | bash
-          ```
-
-          Then create a node in your existing Panel and paste its config onto this
-          Mac. Set the node's **Daemon Port to 8443**, not 443, because an unprivileged
-          process cannot bind a port below 1024.
-
-          **Everything on one Mac.** You have no Panel yet and want the whole thing
-          on this machine. This additionally installs PHP, MariaDB and nginx via
-          Homebrew, sets up the Panel and its database, and creates an admin
-          account. The Panel ends up on `http://<your-mac>.local:8088`, with the
-          generated passwords written to `CREDENTIALS.txt`.
-
-          ```
-          curl -fsSL https://raw.githubusercontent.com/__REPO__/main/install.sh | bash -s -- --full
-          ```
-
-          Add `-s -- --launchagent` to either one to also install a LaunchAgent so
-          wings starts at login.
-
-          ## Isolation
-
-          Add `--isolate` to either command to set up everything that stands in for
-          a container: an account per server, the kernel filesystem sandbox, and
-          per-server firewall rules.
-
-          ```
-          curl -fsSL https://raw.githubusercontent.com/__REPO__/main/install.sh | bash -s -- --full --isolate
-          ```
-
-          Wings then runs as root, which it needs to create the accounts and load
-          the firewall rules; the servers themselves end up less privileged than
-          before. If your Panel is on another machine, `config.yml` does not exist
-          until you have created the node, so run it afterwards instead:
-
-          ```
-          sudo ~/.local/bin/pterodactyl-isolate
-          ```
-
-          `sudo ~/.local/bin/pterodactyl-isolate --revert` undoes all of it.
-
-          ## Or install by hand
-
-          Download the binary for your Mac below, `arm64` for Apple silicon or
-          `amd64` for Intel, and check it against `SHA256SUMS`:
-
-          ```
-          shasum -a 256 -c SHA256SUMS --ignore-missing
-          ```
-
-          ## Before you deploy it
-
-          This fork has no containers, so none of the isolation containers provide
-          comes for free. Out of the box every server runs as the same user, can read
-          every other server's files, can reach your Panel and the rest of your LAN,
-          and is not CPU limited.
-
-          Per-server accounts, pf-based network isolation and a CPU limiter are all
-          available as opt-ins, and all need Wings running as root. Even with every
-          one of them on, this is weaker than a container: there is no equivalent of
-          a PID namespace or a disk quota. **Do not use this for shared or
-          multi-tenant hosting.** See the README for what can and cannot be
-          mitigated.
-          NOTES
+          # The notes live in .github/RELEASE_NOTES.md rather than inline here, so
+          # they are reviewed alongside the code they describe. Baked into this
+          # workflow they silently went stale: they still called isolation
+          # opt-in for several releases after it became the default.
+          cp .github/RELEASE_NOTES.md /tmp/notes.md
           sed -i '' "s|__REPO__|${GITHUB_REPOSITORY}|g" /tmp/notes.md
 
           gh release create "$GITHUB_REF_NAME" \

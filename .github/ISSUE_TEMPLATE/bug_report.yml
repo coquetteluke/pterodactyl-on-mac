@@ -1,0 +1,102 @@
+name: Bug report
+description: Something is broken or behaves differently from the README
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Two things before you paste anything:
+
+        ⚠️ **Do not paste `config.yml` as-is.** It contains `token` and
+        `token_id`, which together authenticate this node to your Panel.
+        Anyone with them can control your servers. Redact both.
+
+        ⚠️ **Redact `CREDENTIALS.txt` too** if you used the full install; it
+        holds your Panel admin and database passwords.
+
+  - type: input
+    id: version
+    attributes:
+      label: Wings version
+      description: Output of `wings version`, or `~/.local/bin/wings version`.
+      placeholder: wings v1.13.2-mac.16
+    validations:
+      required: true
+
+  - type: dropdown
+    id: arch
+    attributes:
+      label: Which Mac
+      options:
+        - Apple silicon (M1/M2/M3/M4)
+        - Intel
+    validations:
+      required: true
+
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      description: "`sw_vers -productVersion`"
+      placeholder: "15.2"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: How is it installed
+      options:
+        - Node only, Panel on another machine
+        - Everything on this Mac (--full)
+        - Built from source
+        - Binary downloaded by hand
+    validations:
+      required: true
+
+  - type: dropdown
+    id: isolation
+    attributes:
+      label: Is isolation on
+      description: On by default since v1.13.2-mac.13. `dscl . -list /Users | grep ptero` lists a per-server account if it is.
+      options:
+        - "Yes"
+        - "No"
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output
+      description: |
+        Useful sources, in rough order:
+          * `~/pterodactyl/logs/wings.stderr.log`
+          * the server's own `logs/latest.log`
+          * whatever the install or management script printed
+
+        Redact tokens and passwords.
+      render: shell
+
+  - type: markdown
+    attributes:
+      value: |
+        **If isolation is on and the problem looks like a permissions or
+        networking failure**, it is worth checking whether the isolation is the
+        cause before anything else:
+
+        ```
+        sudo pfctl -a wings -s rules       # the firewall policy in force
+        sudo ~/.local/bin/pterodactyl-isolate --revert   # turn it all off
+        ```
+
+        Knowing whether reverting fixes it narrows things down a long way.

@@ -20,7 +20,7 @@ set -euo pipefail
 PREFIX="${WINGS_PREFIX:-$HOME/.local/bin}"
 DATA_DIR="${WINGS_DATA_DIR:-$HOME/pterodactyl}"
 PANEL_DIR="${PANEL_DIR:-$HOME/pterodactyl-panel}"
-LABEL="com.github.pterodactyl-on-mac"
+LABEL="${WINGS_LABEL:-com.github.pterodactyl-on-mac}"
 
 info() { printf '\033[1;34m==>\033[0m %s\n' "$1"; }
 warn() { printf '\033[1;33m warning:\033[0m %s\n' "$1" >&2; }
@@ -54,6 +54,8 @@ done
 
 [ "$(uname -s)" = "Darwin" ] || die "this script is for macOS"
 
+adopt_existing_install || true
+
 stop_servers
 remove_wings
 if [ "$FULL" = 1 ]; then
@@ -66,6 +68,28 @@ if [ "$PURGE" = 1 ]; then
 fi
 
 report
+}
+
+# adopt_existing_install learns the layout from whatever service is registered,
+# instead of assuming the paths this project's installer would have used. A node
+# set up by hand, or by an older version, uses a different label and different
+# directories, and assuming means uninstalling quietly removes nothing.
+adopt_existing_install() {
+  local f label prog cfg
+  for f in /Library/LaunchDaemons/*.plist "$HOME/Library/LaunchAgents/"*.plist; do
+    [ -f "$f" ] || continue
+    grep -q '<string>[^<]*/wings</string>' "$f" 2>/dev/null || continue
+
+    label=$(basename "$f" .plist)
+    prog=$(awk -F'[<>]' '/<string>[^<]*\/wings<\/string>/{print $3; exit}' "$f")
+    cfg=$(awk -F'[<>]' '/<string>[^<]*config\.yml<\/string>/{print $3; exit}' "$f")
+
+    [ -n "${WINGS_LABEL:-}" ]    || LABEL="$label"
+    if [ -z "${WINGS_PREFIX:-}" ] && [ -n "$prog" ]; then PREFIX=$(dirname "$prog"); fi
+    if [ -z "${WINGS_DATA_DIR:-}" ] && [ -n "$cfg" ]; then DATA_DIR=$(dirname "$cfg"); fi
+    return 0
+  done
+  return 1
 }
 
 # Servers are deliberately detached from wings -- their own session, stdin on a
@@ -86,8 +110,7 @@ stop_servers() {
     # Negative pid signals the whole process group, so a shell wrapper does not
     # leave the real server behind.
     kill -TERM "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
-    local i
-    for i in $(seq 1 60); do
+    for _ in $(seq 1 60); do
       kill -0 "$pid" 2>/dev/null || break
       sleep 1
     done

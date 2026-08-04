@@ -1,5 +1,3 @@
-fyi this is 100% claude ai. i dont know how to code nor work github. idk if ill be actively maintaining this. submit any errors u get please. ty
-
 # Pterodactyl on Mac
 
 Run Pterodactyl game servers natively on macOS. No virtual machine, no Docker.
@@ -30,6 +28,14 @@ or `--yes` to skip the questions entirely.
 **That one command is the only one you need.** Run it again later on a machine
 that already has a node and it asks what to do instead: update, reinstall, turn
 isolation on or off, or remove it.
+
+## Status
+
+This was written with heavy AI assistance. I am not a Go developer and I do not
+really know GitHub. It is genuinely tested, and the tests are real ones, but
+read it before you trust it with anything you care about.
+
+Bug reports are very welcome. Active maintenance is not promised.
 
 ## ⚠️ Before you deploy it
 
@@ -188,6 +194,17 @@ chmod +x wings_darwin_arm64 && mv wings_darwin_arm64 ~/.local/bin/wings
 ```
 
 Use `wings_darwin_amd64` on an Intel Mac.
+
+If you download the binary through a **browser** rather than with `curl`, macOS
+attaches a quarantine attribute and Gatekeeper refuses to run it, because this
+is unsigned and unnotarised. Clear it:
+
+```bash
+xattr -d com.apple.quarantine wings_darwin_arm64
+```
+
+`curl` does not set that attribute, so neither the install command nor the
+`curl` lines above are affected.
 
 ### Updating
 

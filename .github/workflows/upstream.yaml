@@ -1,0 +1,74 @@
+name: Upstream drift
+
+# "Tracking v1.13.2" in the README is a claim that goes stale silently, because
+# nothing here changes when upstream tags a release. This opens an issue when it
+# does, so the claim is either true or there is a note saying otherwise.
+
+on:
+  schedule:
+    - cron: "0 8 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    name: Check for a newer upstream release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Code checkout
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+
+      - name: Compare with pterodactyl/wings
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          upstream=$(gh release view --repo pterodactyl/wings --json tagName -q .tagName)
+          # This fork tags v<upstream>-mac.N, so the tracked version is the part
+          # before "-mac".
+          ours=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName)
+          tracked=${ours%%-mac.*}
+
+          echo "upstream: ${upstream}"
+          echo "tracked:  ${tracked}  (from ${ours})"
+
+          if [ "$upstream" = "$tracked" ]; then
+            echo "Up to date."
+            exit 0
+          fi
+
+          # Only one open issue at a time, or this files a new one every week.
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" \
+            --label upstream --state open --search "${upstream} in:title" \
+            --json number -q '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            echo "Already tracked in #${existing}."
+            exit 0
+          fi
+
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "Upstream Wings ${upstream} released; this fork tracks ${tracked}" \
+            --label upstream \
+            --body "$(cat <<EOF
+[pterodactyl/wings ${upstream}](https://github.com/pterodactyl/wings/releases/tag/${upstream})
+is out. The latest release here is \`${ours}\`, which tracks \`${tracked}\`.
+
+The README claims a tracked version, so either rebase onto ${upstream} and cut a
+release, or say in the README that it is behind.
+
+Worth checking when rebasing, since these are where this fork diverges most:
+
+- \`internal/ufs\` is split per GOOS. Changes to path handling upstream need the
+  darwin side checked too, especially anything touching \`openat\`.
+- \`environment/native\` has no upstream counterpart. Changes to the
+  \`ProcessEnvironment\` interface land here.
+- \`internal/sandbox\`, \`internal/netiso\` and \`internal/serveruser\` are additions
+  and should rebase cleanly unless \`config\` or \`server/manager.go\` moved.
+
+Opened automatically by \`.github/workflows/upstream.yaml\`.
+EOF
+)"

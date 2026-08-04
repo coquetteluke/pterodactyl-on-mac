@@ -1,0 +1,10 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Upstream Pterodactyl Wings
+    url: https://github.com/pterodactyl/wings/issues
+    about: >
+      If it is not macOS specific, it probably belongs upstream. This fork only
+      changes how servers are run on macOS; everything else is upstream's code.
+  - name: Pterodactyl Panel support
+    url: https://discord.gg/pterodactyl
+    about: Panel questions, eggs, and general Pterodactyl help.

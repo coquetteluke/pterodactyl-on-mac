@@ -106,6 +106,7 @@ ISOLATE=""
 ACTION=""
 PURGE=0
 ASSUME_YES=0
+NO_VERIFY=0
 for arg in "$@"; do
   case "$arg" in
     --full|--panel) MODE=full ;;
@@ -118,6 +119,7 @@ for arg in "$@"; do
     --update) ACTION=update ;;
     --uninstall) ACTION=uninstall ;;
     --purge) ACTION=uninstall; PURGE=1 ;;
+    --no-verify) NO_VERIFY=1 ;;
     -y|--yes) ASSUME_YES=1 ;;
     -h|--help)
       # Printed inline rather than read back out of $0: when this script is
@@ -144,6 +146,7 @@ below instead if you are scripting it.
     --isolate       an account, a sandbox and firewall rules per server (default)
     --no-isolate    skip that, and run every server as one unprivileged user
     -y, --yes       take the defaults, ask nothing
+    --no-verify     install even if the checksum cannot be verified
 
   On a machine that already has a node, this same command also manages it:
 
@@ -272,21 +275,28 @@ install_wings() {
   info "Downloading ${asset} (${tag})"
   curl -fsSL -o "${tmp}/wings" "${base}/${asset}" || die "download failed"
 
-  # Verify against the published checksums so a corrupted or tampered download
-  # is caught before it is installed.
-  if curl -fsSL -o "${tmp}/SHA256SUMS" "${base}/SHA256SUMS" 2>/dev/null; then
+  # Verify against the published checksums, and refuse to install if that cannot
+  # be done.
+  #
+  # This fails closed on purpose. The checksums come from the same origin as the
+  # binary, so this only ever proved the download was not corrupted, but a
+  # missing SHA256SUMS also means something is wrong with the release. For
+  # something people run by piping it into a shell, installing anyway on the
+  # strength of a warning nobody reads is the wrong default. --no-verify is
+  # there for anyone who genuinely needs it.
+  if [ "$NO_VERIFY" = 1 ]; then
+    warn "skipping checksum verification because --no-verify was given"
+  else
+    curl -fsSL -o "${tmp}/SHA256SUMS" "${base}/SHA256SUMS" 2>/dev/null \
+      || die "could not download SHA256SUMS for ${tag}, so the binary cannot be verified. Re-run with --no-verify to install it unchecked."
     info "Verifying checksum"
     expected=$(awk -v a="$asset" '$2 == a || $2 == "*"a {print $1; exit}' "${tmp}/SHA256SUMS")
     actual=$(shasum -a 256 "${tmp}/wings" | awk '{print $1}')
-    if [ -z "$expected" ]; then
-      warn "no checksum listed for ${asset}; skipping verification"
-    elif [ "$expected" != "$actual" ]; then
-      die "checksum mismatch (expected ${expected}, got ${actual}) -- not installing"
-    else
-      info "Checksum OK"
-    fi
-  else
-    warn "no SHA256SUMS published for ${tag}; skipping verification"
+    [ -n "$expected" ] \
+      || die "SHA256SUMS lists no checksum for ${asset}. Re-run with --no-verify to install it unchecked."
+    [ "$expected" = "$actual" ] \
+      || die "checksum mismatch (expected ${expected}, got ${actual}) -- not installing"
+    info "Checksum OK"
   fi
 
   chmod +x "${tmp}/wings"
@@ -412,7 +422,7 @@ install_panel() {
   brew services start mariadb >/dev/null 2>&1 || true
   # Give MariaDB a moment to accept connections on first start.
   local i
-  for i in $(seq 1 30); do
+  for _ in $(seq 1 30); do
     "${bp}/bin/mysqladmin" ping >/dev/null 2>&1 && break
     sleep 1
   done
@@ -558,7 +568,11 @@ PLIST
   launchctl bootstrap "gui/${uid}" "${agents}/com.pterodactyl.panel.queue.plist" 2>/dev/null || true
   launchctl bootstrap "gui/${uid}" "${agents}/com.pterodactyl.panel.schedule.plist" 2>/dev/null || true
 
-  cat > "${PANEL_DIR}/CREDENTIALS.txt" <<CREDS
+  # The umask is set in a subshell rather than chmod'ing afterwards: between
+  # creating the file and tightening it, the admin and database passwords would
+  # be readable by anyone on the machine for as long as the write took.
+  ( umask 077
+    cat > "${PANEL_DIR}/CREDENTIALS.txt" <<CREDS
 Pterodactyl Panel, generated $(date)
 
   URL:            ${url}
@@ -571,6 +585,9 @@ Pterodactyl Panel, generated $(date)
 
 Keep this file, or change the admin password after your first login.
 CREDS
+  )
+  # Belt and braces: the umask covers creation, this covers a pre-existing file
+  # from an earlier run, whose mode a redirect would not change.
   chmod 600 "${PANEL_DIR}/CREDENTIALS.txt"
 }
 
