@@ -1,3 +1,5 @@
+fyi this is 100% claude ai. i dont know how to code nor work github. idk if ill be actively maintaining this. submit any errors u get please. ty
+
 # wings-darwin
 
 An **unofficial** fork of [Pterodactyl Wings](https://github.com/pterodactyl/wings)
@@ -19,7 +21,7 @@ of Pterodactyl's security model rests on that. This fork has no containers, so:
 
 - **Servers are not isolated from each other or from the host.** Every server
   process runs as the same user, with that user's full filesystem access. One
-  server can read and modify another server's files, and can read `config.yml` —
+  server can read and modify another server's files, and can read `config.yml`
   which contains the node token that authenticates to your Panel.
 - **Resource limits are advisory only.** macOS has no cgroups. The memory and
   CPU values from the Panel are reported back for display but nothing enforces
@@ -35,8 +37,8 @@ every server on it.
 
 ## Why this exists
 
-macOS cannot run Linux containers. Every "Docker for Mac" runtime — Docker
-Desktop, Colima, OrbStack, Rancher — boots a Linux VM to do it, and Apple's own
+macOS cannot run Linux containers. Every "Docker for Mac" runtime (Docker
+Desktop, Colima, OrbStack, Rancher) boots a Linux VM to do it, and Apple's own
 `container` framework runs a micro-VM per container and requires Apple silicon.
 So "run Pterodactyl on a Mac" has always meant "run a Linux VM on a Mac."
 
@@ -47,7 +49,7 @@ Pterodactyl node with no VM involved.
 
 - Full Panel integration: console, file manager, SFTP, power actions, and live
   CPU / memory / disk graphs
-- Servers **survive a Wings restart** — stdin is a FIFO, stdout is a log file,
+- Servers **survive a Wings restart**. stdin is a FIFO, stdout is a log file,
   and the process gets its own session, so a later Wings adopts it by pid
 - Backups, transfers and the egg install flow
 - Linux is unaffected: the Docker environment is untouched and still the default
