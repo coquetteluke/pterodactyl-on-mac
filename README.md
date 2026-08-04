@@ -65,16 +65,18 @@ Full detail, including exactly what is and is not enforced, is in
 - [Resource limits](#resource-limits) - memory and CPU
 
 **When it breaks**
-- [Troubleshooting](#troubleshooting)
-- [Where to look when something breaks](#where-to-look-when-something-breaks)
-- [macOS gotcha: Local Network permission](#macos-gotcha-local-network-permission)
+- [Troubleshooting](docs/troubleshooting.md) - the specific errors people hit,
+  what causes them, and the macOS Local Network permission trap
+- [Where to look](docs/troubleshooting.md#where-to-look-when-something-breaks) -
+  which log says what
 
 **Background**
 - [Why this exists](#why-this-exists)
 - [What works](#what-works)
 - [What is different or missing](#what-is-different-or-missing)
-- [Is it actually faster than a VM?](#is-it-actually-faster-than-a-vm)
-- [Notes for anyone porting Wings elsewhere](#notes-for-anyone-porting-wings-elsewhere)
+- [Performance: native versus a VM](docs/performance.md) - measured, with the
+  page-cache caveat that makes most such comparisons wrong
+- [Notes for anyone porting Wings elsewhere](docs/porting.md)
 - [Tests](#tests) / [Support](#support) / [License](#license)
 
 ## Install
@@ -719,173 +721,6 @@ It is off by default because on a machine running one server there is nothing to
 protect it from, and capping it can only make it slower. Turn it on when several
 servers share a machine and one of them misbehaving would ruin the others.
 
-## Troubleshooting
-
-### "An error occurred on the remote host ... (code: 404)" when creating a server
-
-The Panel reached *an* HTTP server and got a 404, so something answered but it
-was not wings. Nearly always the node's **Daemon Port** is pointing at the
-wrong thing, commonly at the Panel's own nginx if you installed both on one
-machine.
-
-Check what is actually listening, from the machine running the Panel:
-
-```bash
-nc -z -w3 <node-ip> 8443 && echo "wings up" || echo "wings NOT listening"
-curl -s -o /dev/null -w '%{http_code}\n' http://<node-ip>:8443/api/system
-```
-
-An unauthenticated request to a healthy wings returns **401**, not 404 or 200.
-A 404 means you are talking to a web server; a connection failure means wings
-is not running at all.
-
-Then, in Admin → Nodes → your node → Settings:
-
-- **Daemon Port: 8443.** Not 443, which an unprivileged process cannot bind, and
-  not the Panel's port.
-- **SSL: off**, unless you have put a TLS terminator in front of wings
-  yourself. wings ships no certificate, so with SSL on the Panel tries HTTPS
-  against a plain HTTP daemon.
-- **Behind Proxy: off**, unless there really is a proxy.
-
-And on the node, `config.yml` must contain:
-
-```yaml
-api:
-  port: 8443
-system:
-  environment: native
-  root_directory: /Users/you/pterodactyl
-  data: /Users/you/pterodactyl/volumes
-ignore_panel_config_updates: true
-```
-
-Start it in the foreground the first time so you can read the errors:
-
-```bash
-~/.local/bin/wings --config ~/pterodactyl/config.yml
-```
-
-### The node shows offline even though wings is running
-
-If `api.port` in `config.yml` disagrees with the node's Daemon Port, the Panel
-is knocking on the wrong door. The Panel pushes `api.port = daemonListen` every
-time a node is saved, which is why `ignore_panel_config_updates: true` is
-recommended. Without it, saving the node in the UI silently rewrites your
-config back to a port the daemon cannot bind, and it stops coming back after a
-restart.
-
-### A new server exits with code 1 immediately and prints nothing
-
-The install script did not produce a jar, so there is nothing to run. Check the
-install log at `<data-dir>/logs/install/<server-uuid>.log`.
-
-The usual cause is a missing command-line tool. Egg install scripts are written
-for the Alpine and Debian installer images, where `jq` and `wget` are a given;
-macOS ships neither. The Paper script in particular pipes `curl` through `jq` to
-build its download URL, so without `jq` the URL is empty, `curl` writes nothing,
-the install appears to succeed, and the server exits 1 on boot with no output.
-
-```bash
-brew install jq wget
-```
-
-Then hit **Reinstall Server** in the Panel. The installer does this for you on a
-fresh install; you only need it by hand if you set wings up before this was
-added, or installed the binary manually.
-
-### Servers get killed shortly after starting
-
-Check the startup command for `-XX:MaxRAMPercentage`; see
-[the note above](#watch-out-for-maxrampercentage-in-egg-startup-commands). The
-JVM is sizing its heap off the whole machine rather than the server's limit.
-
-### wings only starts with sudo, and my files are all root-owned
-
-Your `config.yml` still has the Panel's Linux defaults, `/var/lib/pterodactyl`,
-which needs root on macOS. Point it at your home directory instead of
-escalating; see step 3 of the walkthrough. To undo it:
-
-```bash
-sudo pkill -f 'bin/wings'
-sed -i '' "s|/var/lib/pterodactyl|$HOME/pterodactyl|g; s|/var/log/pterodactyl|$HOME/pterodactyl/logs|g" ~/pterodactyl/config.yml
-sudo cp -a /var/lib/pterodactyl/volumes/. ~/pterodactyl/volumes/ 2>/dev/null
-sudo chown -R "$USER":staff ~/pterodactyl
-~/.local/bin/wings --config ~/pterodactyl/config.yml
-```
-
-Running as root *by accident* also means your game servers run as root, which is
-a worse position than upstream Pterodactyl puts you in, where the container
-contains a compromised plugin.
-
-Note that this is different from [turning on isolation](#isolation),
-which runs wings as root deliberately. There, root is what lets wings create the
-per-server accounts and load the firewall rules, and each server then drops to
-an account of its own, so the servers end up **less** privileged, not more. The
-problem described here is wings running as root while servers inherit that.
-
-### The "accept the EULA" dialog never appears
-
-That dialog is driven entirely by the Panel matching the line "you need to
-agree to the eula in order to run the server" in the live console stream. If
-the server's output is not reaching the Panel, the dialog cannot fire, and
-neither can the Java-version or PID-limit prompts.
-
-Fixed in v1.13.2-mac.7: the console tail was being torn down the instant the
-process exited, discarding anything written in the previous 50ms, which for a
-server that fails immediately is all of it. Update, or accept it manually by
-setting `eula=true` in `eula.txt` through the Panel's file manager.
-
-### Servers cannot reach a database on another machine
-
-Two different causes, and they look identical from the server's side.
-
-If you have **network isolation** on, this is working as intended: a database on
-your LAN sits in a private range, and those are blocked. Add its address to
-`allow_out` and restart wings:
-
-```yaml
-system:
-  network_isolation:
-    allow_out:
-      - 192.168.1.50
-```
-
-`sudo pfctl -a wings -s rules` shows what is actually loaded, which is the
-quickest way to tell whether a rule is the cause.
-
-If isolation is **off**, it is macOS Local Network permission rather than
-networking. See below.
-
-## Where to look when something breaks
-
-Everything is a plain file. Assuming the paths above:
-
-| what | where |
-| --- | --- |
-| wings' own log | `~/pterodactyl/logs/wings.stderr.log` (or the terminal) |
-| a server's console | `~/pterodactyl/native/<server-uuid>/console.log` |
-| a server's install log | `~/pterodactyl/logs/install/<server-uuid>.log` |
-| the server's files | `~/pterodactyl/volumes/<server-uuid>/` |
-| what wings is running as | `ps aux \| grep "[w]ings"` |
-
-If those paths do not exist, wings is using different ones, so check
-`root_directory` in your `config.yml`. If they exist but you get "no such file"
-or empty globs, wings is running as root and your shell cannot see into them;
-that is a sign to go back to step 3.
-
-## macOS gotcha: Local Network permission
-
-If your servers cannot reach anything on your LAN, such as a database on another
-machine, and you get `EHOSTUNREACH` / `NoRouteToHostException` while the
-same connection works fine from your shell, this is **not** a networking problem.
-
-macOS 15+ requires Local Network permission, and a process started by `launchd`
-has no UI, so it can never trigger the permission prompt. It just fails. Grant
-it under **System Settings → Privacy & Security → Local Network**. Apple-signed
-binaries and processes running as root are unaffected, which is what makes this
-so confusing to diagnose.
-
 ## Why this exists
 
 macOS cannot run Linux containers. Every "Docker for Mac" runtime (Docker
@@ -912,7 +747,7 @@ Pterodactyl node with no VM involved.
 | --- | --- | --- |
 | filesystem isolation | mount namespace per server | unix accounts + kernel sandbox, opt-in |
 | network isolation | network namespace per server | pf rules keyed on uid, opt-in |
-| process isolation | PID namespace per server | none, servers can see each other's processes |
+| process isolation | PID namespace per server | separate accounts, plus optional process hiding |
 | memory limit | enforced by the kernel | enforced by supervision, ~1s latency |
 | CPU limit | enforced via cgroups | enforced by supervision, opt-in |
 | egg install | runs in the installer image | runs on the host (see below) |
@@ -928,76 +763,6 @@ They also assume the installer image's toolbox. `curl`, `tar` and `unzip` are on
 macOS already; `jq` and `wget` are not, and plenty of eggs need them, so the
 installer adds both. Anything the *startup* command invokes, such as `java`, `node`
 or `python`, you must install yourself, since no image supplies it.
-
-## Is it actually faster than a VM?
-
-Mostly no. The win is memory, not speed.
-
-These are measured on one machine, a 2019 Intel MacBook Pro with 16 GB running a
-Paper 26.2 server and 43 plugins, comparing the same server before and after
-it was moved off a Lima VM (8 vCPU, 12 GiB, `vz`) onto the host.
-
-| | VM | native |
-| --- | --- | --- |
-| server startup | 39.7s (n=16) | ~38.6s |
-| cold read, 130 MB / 244 files | 257 ms | 220 ms |
-| memory reserved | 12 GiB | what the server uses (5.5 GB) |
-| LAN round trip | ~0.4 ms | ~0.4 ms |
-
-**Startup time does not improve.** Apple's Virtualization.framework is
-hardware-accelerated, so CPU-bound JVM work already ran at close to native
-speed. Sixteen boots from the VM era averaged 39.7s; the quietest native boot
-was 38.6s. That is a wash, and it is the honest answer to "will my server run
-faster": it will not, noticeably.
-
-**Disk I/O improves by around 14%**, which is the virtio-blk and disk-image
-layers going away. Worth having for a Minecraft server, which does a lot of
-small random reads, but not transformative.
-
-Beware of measuring this badly: dropping caches *inside* the guest does not
-evict the disk image from the *host's* page cache, so the VM's "cold" read is
-served from host RAM and looks about twice as fast as native. Both layers have
-to be purged for the comparison to mean anything.
-
-**Memory is the real difference.** A VM reserves what you give it whether the
-workload needs it or not. 12 GiB of a 16 GiB machine was committed to running a
-process that fits in 5.5 GB. Getting that back is the reason to do this, and on
-a machine with plenty of RAM to spare the case is much weaker.
-
-**Networking is unchanged** if the VM was already bridged. Lima's default
-userspace port forwarding costs real latency, roughly 31 ms as observed here
-before bridging, but `socket_vmnet` removes that without leaving the VM.
-
-The operational difference does not show up in a benchmark: the VM is another
-thing that has to be running. Backups on this node silently stopped for two
-days because the VM was powered off, not because anything failed.
-
-## Notes for anyone porting Wings elsewhere
-
-The Docker code was not the hard part. The Docker SDK is a pure-Go HTTP client
-and cross-compiles to darwin untouched. The work was in `internal/ufs`, the
-sandboxed filesystem layer, whose files are tagged `//go:build unix` but use
-Linux-only syscalls:
-
-- **`/proc/self/fd/N` does not exist on macOS.** Wings uses it to confirm where a
-  descriptor actually landed after opening a multi-component path, since `O_NOFOLLOW`
-  only guards the final component, so an intermediate symlink could otherwise
-  escape the sandbox. The macOS equivalent is `fcntl(F_GETPATH)`.
-- `F_GETPATH` returns **firmlink-resolved** paths, so a base directory under
-  `/var`, `/tmp` or `/etc` comes back as `/private/...` and every sandbox check
-  fails closed. The base is resolved once and results are translated back.
-- There is no `openat2`/`RESOLVE_BENEATH` on XNU, so darwin takes the
-  pre-5.6-kernel `openat` path that validates in userspace. `NewUnixFS` clamps
-  the request so a caller asking for openat2 cannot get a filesystem where every
-  operation returns `ENOSYS`.
-- Don't reach for `x/sys/unix.Getdirentries` on darwin. It emulates `getdents`
-  by re-opening the directory and skipping N entries per call, which is O(n²).
-  Use `fdopendir` (via `os.File.ReadDir`).
-
-Process accounting for the Panel's graphs uses `proc_info(2)`
-(`PROC_PIDTASKINFO` / `PROC_PIDTBSDINFO`) directly, so there is no cgo
-dependency, and it sums across the process group so a shell wrapper doesn't
-under-report.
 
 ## Tests
 
