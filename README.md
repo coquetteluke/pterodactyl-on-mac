@@ -341,6 +341,72 @@ Two things worth knowing:
   readable by the account you normally log in as. Use SFTP or the Panel's file
   manager rather than editing them directly over ssh.
 
+## Troubleshooting
+
+### "An error occurred on the remote host ... (code: 404)" when creating a server
+
+The Panel reached *an* HTTP server and got a 404, so something answered but it
+was not wings. Nearly always the node's **Daemon Port** is pointing at the
+wrong thing — commonly at the Panel's own nginx if you installed both on one
+machine.
+
+Check what is actually listening, from the machine running the Panel:
+
+```bash
+nc -z -w3 <node-ip> 8443 && echo "wings up" || echo "wings NOT listening"
+curl -s -o /dev/null -w '%{http_code}\n' http://<node-ip>:8443/api/system
+```
+
+An unauthenticated request to a healthy wings returns **401**, not 404 or 200.
+A 404 means you are talking to a web server; a connection failure means wings
+is not running at all.
+
+Then, in Admin → Nodes → your node → Settings:
+
+- **Daemon Port: 8443.** Not 443 — an unprivileged process cannot bind it — and
+  not the Panel's port.
+- **SSL: off**, unless you have put a TLS terminator in front of wings
+  yourself. wings ships no certificate, so with SSL on the Panel tries HTTPS
+  against a plain HTTP daemon.
+- **Behind Proxy: off**, unless there really is a proxy.
+
+And on the node, `config.yml` must contain:
+
+```yaml
+api:
+  port: 8443
+system:
+  environment: native
+  root_directory: /Users/you/pterodactyl
+  data: /Users/you/pterodactyl/volumes
+ignore_panel_config_updates: true
+```
+
+Start it in the foreground the first time so you can read the errors:
+
+```bash
+~/.local/bin/wings --config ~/pterodactyl/config.yml
+```
+
+### The node shows offline even though wings is running
+
+If `api.port` in `config.yml` disagrees with the node's Daemon Port, the Panel
+is knocking on the wrong door. The Panel pushes `api.port = daemonListen` every
+time a node is saved, which is why `ignore_panel_config_updates: true` is
+recommended — without it, saving the node in the UI silently rewrites your
+config back to a port the daemon cannot bind, and it stops coming back after a
+restart.
+
+### Servers get killed shortly after starting
+
+Check the startup command for `-XX:MaxRAMPercentage`; see
+[the note above](#watch-out-for-maxrampercentage-in-egg-startup-commands). The
+JVM is sizing its heap off the whole machine rather than the server's limit.
+
+### Servers cannot reach a database on another machine
+
+That is macOS Local Network permission, not networking — see below.
+
 ## macOS gotcha: Local Network permission
 
 If your servers cannot reach anything on your LAN — a database on another
