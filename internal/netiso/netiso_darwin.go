@@ -88,9 +88,53 @@ func Apply(rules []Rule) error {
 		return err
 	}
 	if !referenced {
-		return ErrAnchorNotReferenced
+		// macOS does not load /etc/pf.conf at boot unless pf was already
+		// enabled, so on a freshly booted machine the kernel ruleset is empty
+		// and references nothing, even though the file on disk is correct.
+		// Enabling pf does not load it either. Recover from that rather than
+		// refusing to start every time the machine reboots.
+		loaded, lerr := loadMainRulesetIfConfigured()
+		if lerr != nil {
+			return lerr
+		}
+		if !loaded {
+			return ErrAnchorNotReferenced
+		}
+		if referenced, err = anchorIsReferenced(); err != nil {
+			return err
+		}
+		if !referenced {
+			return ErrAnchorNotReferenced
+		}
 	}
 	return nil
+}
+
+// MainConfigPath is the system pf configuration, which is what has to
+// reference our anchor for any of the generated rules to be evaluated.
+const MainConfigPath = "/etc/pf.conf"
+
+// loadMainRulesetIfConfigured loads the system ruleset when it is the thing
+// that would make our anchor live, and reports whether it did.
+//
+// The check on the file's contents matters: it means this only ever reloads a
+// configuration that was already set up to evaluate our rules. An operator who
+// has deliberately loaded some other ruleset, one that does not mention wings,
+// does not have theirs replaced out from under them; they get the error telling
+// them what to add instead.
+func loadMainRulesetIfConfigured() (bool, error) {
+	body, err := os.ReadFile(MainConfigPath)
+	if err != nil {
+		// No system config to fall back on, so the caller's error stands.
+		return false, nil
+	}
+	if !strings.Contains(string(body), `anchor "`+AnchorName+`"`) {
+		return false, nil
+	}
+	if err := run("pfctl", "-f", MainConfigPath); err != nil {
+		return false, errors.WithMessage(err, "netiso: failed to load "+MainConfigPath)
+	}
+	return true, nil
 }
 
 // Clear removes every rule Wings loaded and releases its claim on pf.

@@ -40,14 +40,27 @@ func (e *Environment) sandboxCommand(dir, startup string) ([]string, error) {
 		return nil, errors.WrapIf(err, "environment/native: failed to build the sandbox profile")
 	}
 
-	path, err := e.writeSandboxProfile(body)
-	if err != nil {
+	// Written only so an operator can see the policy in force. It is
+	// deliberately not what gets applied; see below.
+	if _, err := e.writeSandboxProfile(body); err != nil {
 		return nil, err
 	}
 
-	// sandbox-exec applies the profile and then execs, so the shell and every
+	// The profile is passed inline rather than as a file path.
+	//
+	// With per-server accounts the process drops to the server's own uid
+	// before sandbox-exec runs, so sandbox-exec would have to read the profile
+	// as that account. The file lives in the server's runtime directory, which
+	// is owned by whoever wings runs as and is not readable by the server, so
+	// -f fails with a bare exit code 65 and no message. Passing the policy in
+	// argv removes the dependency on file permissions entirely.
+	//
+	// The profile contains paths, not secrets, so it being visible in ps is
+	// not a leak.
+	//
+	// sandbox-exec applies the policy and then execs, so the shell and every
 	// process it goes on to spawn inherit the confinement.
-	return append([]string{sandbox.ExecPath, "-f", path}, plain...), nil
+	return append([]string{sandbox.ExecPath, "-p", body}, plain...), nil
 }
 
 // writeSandboxProfile stores the profile next to the server's other runtime
