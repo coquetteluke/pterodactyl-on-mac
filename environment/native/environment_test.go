@@ -477,6 +477,83 @@ func TestNativeEnvironment_MemoryLimitDecision(t *testing.T) {
 	})
 }
 
+// Eggs put {{VARIABLE}} placeholders in their startup commands and rely on the
+// container entrypoint to expand them. Without a container nothing else will,
+// so the server would be told to run a jar named literally
+// "{{SERVER_JARFILE}}" and would exit 1 having printed almost nothing.
+func TestExpandStartupVariables(t *testing.T) {
+	env := []string{
+		"SERVER_JARFILE=server.jar",
+		"SERVER_MEMORY=4000",
+		"SERVER_IP=192.168.4.28",
+		"SERVER_PORT=25565",
+		"EMPTY=",
+	}
+
+	for _, tc := range []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "the case that broke a real server",
+			in:   "java -Xms128M -XX:MaxRAMPercentage=95.0 -jar {{SERVER_JARFILE}}",
+			want: "java -Xms128M -XX:MaxRAMPercentage=95.0 -jar server.jar",
+		},
+		{
+			name: "several placeholders including repeats",
+			in:   "run --ip {{SERVER_IP}} --port {{SERVER_PORT}} --mem {{SERVER_MEMORY}}M --max {{SERVER_MEMORY}}M",
+			want: "run --ip 192.168.4.28 --port 25565 --mem 4000M --max 4000M",
+		},
+		{
+			name: "whitespace inside the braces is tolerated",
+			in:   "java -jar {{ SERVER_JARFILE }}",
+			want: "java -jar server.jar",
+		},
+		{
+			name: "an already-literal command is left alone",
+			in:   "java -Xms6144M -jar server.jar",
+			want: "java -Xms6144M -jar server.jar",
+		},
+		{
+			name: "an unknown variable becomes empty, as the shell would make it",
+			in:   "java -jar {{NOT_SET}}",
+			want: "java -jar ",
+		},
+		{
+			name: "a variable set to empty stays empty",
+			in:   "java {{EMPTY}} -jar server.jar",
+			want: "java  -jar server.jar",
+		},
+		{
+			name: "a lone brace pair is not a placeholder",
+			in:   "java -jar server.jar --flag {notavar}",
+			want: "java -jar server.jar --flag {notavar}",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := expandStartupVariables(tc.in, env); got != tc.want {
+				t.Fatalf("\n got: %q\nwant: %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// The expansion must not let a variable's contents restructure the command.
+func TestExpandStartupVariables_DoesNotReevaluate(t *testing.T) {
+	env := []string{`SERVER_JARFILE=my server.jar`, `EVIL=$(touch /tmp/pwned)`}
+
+	got := expandStartupVariables("java -jar {{SERVER_JARFILE}} {{EVIL}}", env)
+	want := "java -jar my server.jar $(touch /tmp/pwned)"
+	if got != want {
+		t.Fatalf("\n got: %q\nwant: %q", got, want)
+	}
+	// The substitution itself is literal. (The result is still handed to a
+	// shell, exactly as the Docker entrypoint does, so an operator who puts a
+	// command substitution in a variable still gets one -- but the expansion
+	// step does not introduce a second round of evaluation.)
+}
+
 func TestNativeEnvironment_StatsReflectRealUsage(t *testing.T) {
 	// Burn CPU so the sampler has something unambiguous to measure.
 	e := newTestEnvironment(t, `a=0; while :; do a=$((a+1)); done`, remote.ProcessStopConfiguration{

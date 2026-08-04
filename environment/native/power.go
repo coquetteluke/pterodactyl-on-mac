@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -35,22 +36,53 @@ func (e *Environment) OnBeforeStart(ctx context.Context) error {
 	return e.Create()
 }
 
+// startupVariable matches the {{VARIABLE}} placeholders eggs use in their
+// startup commands.
+var startupVariable = regexp.MustCompile(`\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}`)
+
 // startupCommand returns the command line the Panel wants run for this server.
 //
-// Pterodactyl passes this through the STARTUP environment variable, which the
-// egg's Docker image would normally hand to a shell in its entrypoint. The
-// Panel has already substituted every {{VARIABLE}} placeholder by this point,
-// so the value is used as-is.
+// The Panel does *not* substitute the {{VARIABLE}} placeholders in a startup
+// command; it sends them through verbatim in STARTUP and relies on the egg
+// image's entrypoint to expand them, which yolks does by rewriting {{X}} to
+// ${X} and letting a shell evaluate the result. There is no image here, so
+// nothing would expand them and the server would be handed a jar named
+// literally "{{SERVER_JARFILE}}".
+//
+// Expanding them here rather than deferring to the shell keeps the startup
+// command from being re-evaluated: a variable whose value contains a quote or
+// a $ would otherwise change the shape of the command being run.
 func (e *Environment) startupCommand() (string, error) {
-	for _, v := range e.Configuration.EnvironmentVariables() {
+	env := e.Configuration.EnvironmentVariables()
+	for _, v := range env {
 		if name, value, ok := strings.Cut(v, "="); ok && name == "STARTUP" {
 			if strings.TrimSpace(value) == "" {
 				break
 			}
-			return value, nil
+			return expandStartupVariables(value, env), nil
 		}
 	}
 	return "", errors.New("environment/native: server has no STARTUP command configured")
+}
+
+// expandStartupVariables replaces {{VARIABLE}} placeholders with values from
+// the server's environment.
+//
+// An unknown placeholder becomes an empty string, which is what the shell
+// expansion in the egg entrypoint would also produce, so a startup command
+// referencing a variable the Panel did not send fails the same way on both
+// environments rather than differently.
+func expandStartupVariables(startup string, env []string) string {
+	values := make(map[string]string, len(env))
+	for _, v := range env {
+		if name, value, ok := strings.Cut(v, "="); ok {
+			values[name] = value
+		}
+	}
+	return startupVariable.ReplaceAllStringFunc(startup, func(match string) string {
+		name := startupVariable.FindStringSubmatch(match)[1]
+		return values[name]
+	})
 }
 
 // Start boots the server process and begins streaming its console.
