@@ -47,17 +47,62 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Written to a file rather than passed inline: the notes contain
+          # backticks and $-signs that would otherwise need escaping twice, once
+          # for YAML and once for the shell.
+          cat > /tmp/notes.md <<'NOTES'
+          Unofficial macOS build of Pterodactyl Wings, which runs game servers as
+          host processes because macOS cannot run Linux containers.
+
+          ## Which one do I want?
+
+          **Just this Mac as a node.** You already have a Panel somewhere else — a
+          Raspberry Pi, another machine on your network, a VPS — and you want this
+          Mac to run game servers for it. This installs only the daemon.
+
+          ```
+          curl -fsSL https://raw.githubusercontent.com/__REPO__/main/install.sh | bash
+          ```
+
+          Then create a node in your existing Panel and paste its config onto this
+          Mac. Set the node's **Daemon Port to 8443**, not 443 — an unprivileged
+          process cannot bind a port below 1024.
+
+          **Everything on one Mac.** You have no Panel yet and want the whole thing
+          on this machine. This additionally installs PHP, MariaDB and nginx via
+          Homebrew, sets up the Panel and its database, and creates an admin
+          account. The Panel ends up on `http://<your-mac>.local:8088`, with the
+          generated passwords written to `CREDENTIALS.txt`.
+
+          ```
+          curl -fsSL https://raw.githubusercontent.com/__REPO__/main/install.sh | bash -s -- --full
+          ```
+
+          Add `-s -- --launchagent` to either one to also install a LaunchAgent so
+          wings starts at login.
+
+          ## Or install by hand
+
+          Download the binary for your Mac below — `arm64` for Apple silicon,
+          `amd64` for Intel — and check it against `SHA256SUMS`:
+
+          ```
+          shasum -a 256 -c SHA256SUMS --ignore-missing
+          ```
+
+          ## Before you deploy it
+
+          This fork has no containers, so it also has none of the isolation
+          containers provide. By default every server runs as the same user and can
+          read every other server's files, and CPU limits are not enforced at all.
+          **Do not use this for shared or multi-tenant hosting.** See the README for
+          what can and cannot be mitigated.
+          NOTES
+          sed -i '' "s|__REPO__|${GITHUB_REPOSITORY}|g" /tmp/notes.md
+
           gh release create "$GITHUB_REF_NAME" \
             --title "$GITHUB_REF_NAME" \
-            --notes "Unofficial macOS build of Pterodactyl Wings. See the README for the security caveats -- this is for single-tenant use only.
-
-          Install:
-
-          \`\`\`
-          curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/install.sh | bash
-          \`\`\`
-
-          Or download the binary for your Mac below (\`arm64\` for Apple silicon, \`amd64\` for Intel) and verify it against \`SHA256SUMS\`." \
+            --notes-file /tmp/notes.md \
             dist/wings_darwin_amd64 \
             dist/wings_darwin_arm64 \
             dist/SHA256SUMS
