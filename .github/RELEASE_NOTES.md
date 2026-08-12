@@ -17,6 +17,19 @@ or `--full` to answer that up front, or `--yes` to skip the questions entirely.
 If your Panel is on another machine, set the node's **Daemon Port to 8443**, not
 443: an unprivileged process cannot bind a port below 1024.
 
+## Updating
+
+Already running this on a Mac? The same command updates it. Run it again and it
+asks, or go straight there:
+
+```
+curl -fsSL https://raw.githubusercontent.com/__REPO__/main/install.sh | bash -s -- --update
+```
+
+`--update` replaces the binary and restarts wings without interrupting running
+game servers, so players are not disconnected. The same command also handles
+`--turn-isolation-on`, `--turn-isolation-off`, `--uninstall` and `--purge`.
+
 ## Isolation is on by default
 
 Every server gets its own account, its own view of the disk and its own firewall
@@ -24,19 +37,6 @@ rules, so one server cannot read another's files, read the token that
 authenticates this node to your Panel, or reach the rest of your network. Wings
 runs as root to set that up; the servers themselves end up with fewer privileges
 than without it. Pass `--no-isolate` to skip it.
-
-## Managing an existing node
-
-The same command handles the rest. Run it again and it asks, or go straight
-there:
-
-```
-curl -fsSL https://raw.githubusercontent.com/__REPO__/main/install.sh | bash -s -- --update
-```
-
-`--update` replaces the binary and restarts wings without interrupting running
-game servers. Also `--turn-isolation-on`, `--turn-isolation-off`, `--uninstall`
-and `--purge`.
 
 ## Or install by hand
 
