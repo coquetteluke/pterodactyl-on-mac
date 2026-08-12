@@ -182,7 +182,7 @@ func totalMemory() (uint64, error) {
 
 const (
 	callListPids = 1 // PROC_INFO_CALL_LISTPIDS
-	pgrpOnly     = 3 // PROC_PGRP_ONLY
+	pgrpOnly     = 2 // PROC_PGRP_ONLY
 )
 
 // pidsInGroup returns every pid belonging to a process group.

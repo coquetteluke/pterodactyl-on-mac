@@ -71,6 +71,7 @@ Full detail, including exactly what is and is not enforced, is in
   which log says what
 
 **Background**
+- [The console](#the-console) - why every server has a second process next to it
 - [Why this exists](#why-this-exists)
 - [What works](#what-works)
 - [What is different or missing](#what-is-different-or-missing)
@@ -725,6 +726,39 @@ It is off by default because on a machine running one server there is nothing to
 protect it from, and capping it can only make it slower. Turn it on when several
 servers share a machine and one of them misbehaving would ruin the others.
 
+## The console
+
+Servers print in colour, because each one runs behind a pseudo-terminal. Almost
+everything that colours its output checks whether it is talking to a terminal
+first and prints plain text when it is not, so without one a Minecraft server's
+console arrives as an undifferentiated wall of grey. Upstream gets a terminal by
+setting `Tty` on the container; there is no container here, so one is allocated
+directly.
+
+That is why `ps` shows two processes per server:
+
+```
+501 51204     1  wings console-supervisor -- /bin/sh -c java -Xms128M ...
+501 51205 51204  java -Xms128M -Xmx2G -jar server.jar
+```
+
+A terminal has exactly one master and dies when it closes, so something has to
+hold it open for as long as the server runs. It cannot be Wings: restarting
+Wings would then close every running server's terminal, and the next thing each
+server printed would fail. So Wings re-executes itself as a small supervisor,
+detaches it, and lets it own the terminal instead. Wings tails the same console
+log it always did.
+
+Practical consequences:
+
+- The supervisor is the process group leader, so it is the pid recorded in the
+  runtime directory and the one signals are addressed to. The server sits in the
+  same group and gets them too.
+- It costs about 15 MB of resident memory, and that shows up in the server's
+  memory graph along with the server's own.
+- If a terminal cannot be allocated, the server still starts. It falls back to
+  writing straight to the log file, without colour, and says so in the console.
+
 ## Troubleshooting
 
 Moved to [docs/troubleshooting.md](docs/troubleshooting.md), along with the macOS
@@ -744,8 +778,12 @@ Pterodactyl node with no VM involved.
 
 - Full Panel integration: console, file manager, SFTP, power actions, and live
   CPU / memory / disk graphs
-- Servers **survive a Wings restart**. stdin is a FIFO, stdout is a log file,
-  and the process gets its own session, so a later Wings adopts it by pid
+- **Console colour**, the same as upstream. Servers run behind a pseudo-terminal,
+  so anything that checks whether it is talking to a terminal before colouring
+  its output — which is most things, and every Minecraft server — still does
+- Servers **survive a Wings restart**. stdin is a FIFO, console output lands in
+  a log file, and the process gets its own session, so a later Wings adopts it
+  by pid
 - Backups, transfers and the egg install flow
 - Linux is unaffected: the Docker environment is untouched and still the default
   there

@@ -119,6 +119,27 @@ process exited, discarding anything written in the previous 50ms, which for a
 server that fails immediately is all of it. Update, or accept it manually by
 setting `eula=true` in `eula.txt` through the Panel's file manager.
 
+### The console has no colour
+
+Servers run behind a pseudo-terminal so that they colour their output, so if a
+console is entirely grey something has stopped that happening.
+
+Check the top of the console log for the line the supervisor writes when it
+could not get a terminal:
+
+```
+[Wings] could not allocate a terminal, console colour is disabled: ...
+```
+
+The server still runs in that case; only the colour is lost. Running out of file
+descriptors is the usual cause, and `ulimit -n` on the account wings runs as
+will say.
+
+If there is no such line, the terminal was allocated and the server chose not to
+use it. Most Java servers decide by looking at `TERM`, which wings sets to
+`xterm-256color` unless the egg overrides it — check the egg's variables in the
+Panel for one setting `TERM` to something else, such as `dumb`.
+
 ### Servers cannot reach a database on another machine
 
 Two different causes, and they look identical from the server's side.

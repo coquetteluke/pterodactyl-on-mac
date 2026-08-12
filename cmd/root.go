@@ -88,6 +88,7 @@ func init() {
 	rootCommand.AddCommand(versionCommand)
 	rootCommand.AddCommand(configureCmd)
 	rootCommand.AddCommand(newDiagnosticsCommand())
+	rootCommand.AddCommand(newConsoleSupervisorCommand())
 }
 
 func rootCmdRun(cmd *cobra.Command, _ []string) {

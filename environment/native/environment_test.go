@@ -758,19 +758,22 @@ func TestCPULimit_RunawayServerIsHeldToItsLimit(t *testing.T) {
 	time.Sleep(1500 * time.Millisecond)
 	pid := e.currentPid()
 
-	before, err := pidTaskInfo(pid)
+	// Measure the whole group rather than its leader. The server runs behind
+	// the console supervisor, so the leader is the supervisor and spends its
+	// life blocked on a read; the group is what the limiter controls and what
+	// has to come back to the limit.
+	_, before, err := e.sampleGroup(pid)
 	if err != nil {
 		t.Fatalf("sample: %v", err)
 	}
 	start := time.Now()
 	time.Sleep(3 * time.Second)
-	after, err := pidTaskInfo(pid)
+	_, after, err := e.sampleGroup(pid)
 	if err != nil {
 		t.Fatalf("sample: %v", err)
 	}
 
-	used := (after.TotalUser + after.TotalSystem) - (before.TotalUser + before.TotalSystem)
-	usage := float64(used) / float64(time.Since(start).Nanoseconds()) * 100
+	usage := float64(cpuDelta(before, after)) / float64(time.Since(start).Nanoseconds()) * 100
 	t.Logf("held at %.1f%% against a %d%% limit", usage, limit)
 
 	// Generous bounds: this is a sampled feedback loop on a shared machine, not

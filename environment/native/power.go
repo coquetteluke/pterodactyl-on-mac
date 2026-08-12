@@ -165,6 +165,19 @@ func (e *Environment) Start(ctx context.Context) error {
 		return err
 	}
 
+	// Put a pseudo-terminal between the server and its console log so that the
+	// server sees a terminal on stdout and prints in colour, which is what the
+	// Docker environment gets from setting Tty on the container.
+	//
+	// The supervisor that owns the terminal wraps the sandbox rather than the
+	// other way around. It is wings' own code and has no business being
+	// confined, and sandbox-exec applies the policy to everything below it
+	// regardless, so the server is no less contained for it.
+	argv, err = superviseArgv(argv)
+	if err != nil {
+		return err
+	}
+
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = dir
 	cmd.Env = e.processEnvironment(dir)
@@ -172,11 +185,15 @@ func (e *Environment) Start(ctx context.Context) error {
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		// Give the server its own session, and therefore its own process
-		// group. This does two things: it detaches the server from wings so it
+		// Give the supervisor its own session, and therefore its own process
+		// group. This does two things: it detaches the tree from wings so it
 		// survives wings restarting, and it means signals can be delivered to
-		// the whole group so a shell wrapper cannot leave the real server
-		// process orphaned.
+		// the whole group so neither the supervisor nor a shell wrapper can
+		// leave the real server process orphaned.
+		//
+		// The server inherits this group rather than starting one of its own,
+		// so the recorded pid stays the group leader and a signal addressed to
+		// the group still reaches everything underneath it.
 		Setsid: true,
 	}
 
@@ -184,9 +201,10 @@ func (e *Environment) Start(ctx context.Context) error {
 	// permissions keep it away from other servers' files and from wings'
 	// config.yml, which holds the node token.
 	//
-	// stdin, stdout and stderr are inherited file descriptors, so the server
-	// needs no permission on the FIFO or the log file itself; only its data
-	// directory has to be readable, and the filesystem layer owns that.
+	// stdin, stdout and stderr are inherited file descriptors, so neither the
+	// supervisor nor the server needs permission on the FIFO or the log file
+	// itself; only the server's data directory has to be readable, and the
+	// filesystem layer owns that.
 	e.mu.RLock()
 	account := e.meta.Account
 	e.mu.RUnlock()
@@ -334,7 +352,41 @@ func (e *Environment) processEnvironment(dir string) []string {
 	add("PATH", os.Getenv("PATH"))
 	add("LANG", "en_US.UTF-8")
 
+	// The server runs behind a pseudo-terminal, so tell it what kind. Programs
+	// that consult TERM before reaching for colour treat an unset value the same
+	// as a terminal that cannot display any, which would undo the terminal.
+	// Docker sets this too when a container is given a Tty.
+	add("TERM", "xterm-256color")
+
 	return vars
+}
+
+// consoleSupervisorArgv returns the command prefix that runs a server behind the
+// console supervisor, which is wings re-executing itself with a hidden
+// subcommand.
+//
+// It is a variable because the tests run inside a binary that is not wings and
+// would otherwise re-execute the test suite once per server started.
+var consoleSupervisorArgv = func() ([]string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return nil, errors.Wrap(err, "environment/native: could not locate the wings executable")
+	}
+	return []string{exe, "console-supervisor", "--"}, nil
+}
+
+// superviseArgv wraps a server's command line in the console supervisor.
+//
+// The supervisor exists to own the pseudo-terminal the server writes to. It has
+// to be a separate process because a terminal dies with its master, and wings
+// holding the master would mean restarting wings knocked over every running
+// server. See internal/consolepty.
+func superviseArgv(argv []string) ([]string, error) {
+	prefix, err := consoleSupervisorArgv()
+	if err != nil {
+		return nil, err
+	}
+	return append(prefix, argv...), nil
 }
 
 // Stop requests that the server shut down, using whatever mechanism the Panel

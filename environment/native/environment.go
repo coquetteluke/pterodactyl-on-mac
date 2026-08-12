@@ -20,9 +20,14 @@
 //     startup command invokes must exist on the host's PATH.
 //
 // In exchange the server process survives a wings restart, which a plain
-// exec-and-hold-the-pipes implementation would not: stdin is a FIFO and stdout
-// is a log file, both of which outlive the wings process, and the pid is
-// recorded so a later wings can adopt the running server.
+// exec-and-hold-the-pipes implementation would not: stdin is a FIFO and console
+// output ends up in a log file, both of which outlive the wings process, and the
+// pid is recorded so a later wings can adopt the running server.
+//
+// The server itself talks to a pseudo-terminal rather than to that log file, so
+// that it colours its output the way it would under Docker. The terminal is
+// owned by a supervisor process sitting between wings and the server, for
+// reasons set out in internal/consolepty.
 package native
 
 import (
@@ -78,9 +83,11 @@ type Environment struct {
 
 	meta *Metadata
 
-	// pid of the running server process, or 0 when offline. This is the leader
-	// of its own process group; signals are sent to the whole group so that a
-	// wrapper script does not leave the real server orphaned.
+	// pid of the console supervisor wrapping the running server, or 0 when
+	// offline. This is the leader of its own process group, and the server sits
+	// in that group alongside it; signals are sent to the whole group so that
+	// neither the supervisor nor a wrapper script leaves the real server
+	// orphaned, and resources are sampled across the group for the same reason.
 	pid int
 
 	// stdin is the write end of the console FIFO. It is held open for the
