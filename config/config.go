@@ -28,7 +28,34 @@ import (
 	"github.com/pterodactyl/wings/system"
 )
 
-const DefaultLocation = "/etc/pterodactyl/config.yml"
+// LegacyLocation is where wings has kept its configuration on Linux since
+// 1.0, and where the Docker image still mounts it.
+const LegacyLocation = "/etc/pterodactyl/config.yml"
+
+// DefaultLocation is the path wings reads when no --config flag is passed.
+//
+// On macOS an unprivileged wings cannot write to /etc, and this fork keeps
+// its state under the user's data directory, so the default follows it there.
+// An existing config at the legacy path still wins when no user-level one is
+// present, so upgrading an install that predates this does not break.
+var DefaultLocation = defaultLocation()
+
+func defaultLocation() string {
+	if runtime.GOOS != "darwin" {
+		return LegacyLocation
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return LegacyLocation
+	}
+	p := filepath.Join(home, "pterodactyl", "config.yml")
+	if _, err := os.Stat(p); err != nil {
+		if _, err := os.Stat(LegacyLocation); err == nil {
+			return LegacyLocation
+		}
+	}
+	return p
+}
 
 // DefaultTLSConfig sets sane defaults to use when configuring the internal
 // webserver to listen for public connections.

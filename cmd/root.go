@@ -463,15 +463,17 @@ func exitWithConfigurationNotice() {
 	fmt.Printf(colorstring.Color(`
 [_red_][white][bold]Error: Configuration File Not Found[reset]
 
-Wings was not able to locate your configuration file, and therefore is not
-able to complete its boot process. Please ensure you have copied your instance
-configuration file into the default location below.
+Wings looked for its configuration file and did not find one:
 
-Default Location: %s
+Looked in: %s
+
+This file is not created by the installer. It comes from your Panel: create a
+node under Admin -> Nodes, open its Configuration tab, and save the YAML shown
+there to the path above.
 
 [yellow]This is not a bug with this software. Please do not make a bug report
 for this issue, it will be closed.[reset]
 
-`), config.DefaultLocation)
+`), configPath)
 	os.Exit(1)
 }
