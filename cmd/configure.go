@@ -9,7 +9,10 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"regexp"
+	"runtime"
+	"strings"
 	"time"
 
 	"github.com/AlecAivazis/survey/v2"
@@ -145,8 +148,12 @@ func configureCmdRun(cmd *cobra.Command, args []string) {
 	}
 
 	b, err := io.ReadAll(res.Body)
+	if err != nil {
+		fmt.Println("Failed to read the configuration returned by the panel.\n", err.Error())
+		os.Exit(1)
+	}
 
-	cfg, err := config.NewAtPath(configPath)
+	cfg, err := config.NewAtPath(configureArgs.ConfigPath)
 	if err != nil {
 		panic(err)
 	}
@@ -158,11 +165,61 @@ func configureCmdRun(cmd *cobra.Command, args []string) {
 	// Manually specify the Panel URL as it won't be decoded from JSON.
 	cfg.PanelLocation = configureArgs.PanelURL
 
+	localizeDirectories(cfg)
+
 	if err = config.WriteToDisk(cfg); err != nil {
 		panic(err)
 	}
 
-	fmt.Println("Successfully configured wings.")
+	fmt.Printf("Successfully configured wings. Configuration written to %s\n", configureArgs.ConfigPath)
+}
+
+// localizeDirectories rewrites the Linux paths the Panel always generates so a
+// configuration fetched on macOS is usable without hand-editing.
+//
+// The Panel has no idea what a node runs, so it emits /var/lib/pterodactyl and
+// friends for everyone. On macOS those live under a root-owned /var, wings
+// fails on them, sudo makes the failure go away, and every server then runs as
+// root with root-owned files. Point them at the user's data directory instead.
+//
+// Only untouched Panel defaults are rewritten: a path already outside /var and
+// /tmp was deliberately chosen, so leave it alone.
+func localizeDirectories(cfg *config.Configuration) {
+	if runtime.GOOS != "darwin" {
+		return
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	root := filepath.Join(home, "pterodactyl")
+
+	isDefault := func(p string) bool {
+		return p == "" || strings.HasPrefix(p, "/var/") || strings.HasPrefix(p, "/tmp/")
+	}
+
+	for _, d := range []struct {
+		field *string
+		to    string
+	}{
+		{&cfg.System.RootDirectory, root},
+		{&cfg.System.Data, filepath.Join(root, "volumes")},
+		{&cfg.System.LogDirectory, filepath.Join(root, "logs")},
+		{&cfg.System.ArchiveDirectory, filepath.Join(root, "archives")},
+		{&cfg.System.BackupDirectory, filepath.Join(root, "backups")},
+		{&cfg.System.TmpDirectory, filepath.Join(root, "tmp")},
+	} {
+		if isDefault(*d.field) {
+			*d.field = d.to
+		}
+	}
+
+	// The Panel pushes api.port back to the node's Daemon Port on every save,
+	// which is how a working daemon gets broken later.
+	cfg.IgnorePanelConfigUpdates = true
+
+	fmt.Printf("Rewrote the Panel's Linux directory defaults to %s (macOS).\n", root)
 }
 
 func getRequest() (*http.Request, error) {
