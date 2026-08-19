@@ -815,16 +815,15 @@ $(sed 's/^/    /' "${PANEL_DIR}/CREDENTIALS.txt")
          Daemon Port: 8443                     (not 443: an unprivileged
                                                 process cannot bind it)
          Behind proxy / SSL: off, unless you have set up TLS yourself.
-    3. Open the node's Configuration tab, copy the YAML, and save it to
-       ${DATA_DIR}/config.yml
-    4. Add these two lines to that file so servers run as host processes and
-       the Panel cannot push the port back to 443:
+    3. Open the node's Configuration tab, press the button that generates a
+       token, and run the command it gives you:
 
-         system:
-           environment: native
-         ignore_panel_config_updates: true
+         ${PREFIX}/wings configure --panel-url ${url} --token <token> --node <id>
 
-    5. Start wings:
+       That writes ${DATA_DIR}/config.yml with the directories already
+       pointing here. There is nothing to edit afterwards.
+
+    4. Start wings:
 
          ${PREFIX}/wings --config ${DATA_DIR}/config.yml
 
@@ -846,21 +845,18 @@ $(info "Next steps")
        FQDN:        this Mac's hostname or IP, reachable from the Panel
        Daemon Port: 8443  (not 443: an unprivileged process cannot bind it)
 
-  2. Open the node's Configuration tab, copy the YAML, and save it to
-     ${DATA_DIR}/config.yml
+  2. Open the node's Configuration tab, press the button that generates a
+     token, and run the command it gives you:
 
-  3. Add these lines to that file:
+       ${PREFIX}/wings configure --panel-url <your panel url> --token <token> --node <id>
 
-       system:
-         environment: native
-         root_directory: ${DATA_DIR}
-         data: ${DATA_DIR}/volumes
-       ignore_panel_config_updates: true
+     That writes ${DATA_DIR}/config.yml with the directories already pointing
+     here, so there is nothing to edit afterwards.
 
-  4. Install whatever your servers run -- java, node, python -- and make sure it
+  3. Install whatever your servers run -- java, node, python -- and make sure it
      is on the PATH of whatever starts wings.
 
-  5. Run it:
+  4. Run it:
 
        ${PREFIX}/wings --config ${DATA_DIR}/config.yml
 

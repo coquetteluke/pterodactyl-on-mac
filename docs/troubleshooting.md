@@ -86,8 +86,10 @@ JVM is sizing its heap off the whole machine rather than the server's limit.
 ### wings only starts with sudo, and my files are all root-owned
 
 Your `config.yml` still has the Panel's Linux defaults, `/var/lib/pterodactyl`,
-which needs root on macOS. Point it at your home directory instead of
-escalating; see step 3 of the walkthrough. To undo it:
+which needs root on macOS. `wings configure` rewrites those paths for you, so a
+config fetched that way never lands here; this is a config copied by hand from
+the Panel's Configuration tab. Point it at your home directory instead of
+escalating. To undo it:
 
 ```bash
 sudo pkill -f 'bin/wings'

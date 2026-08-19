@@ -1,6 +1,10 @@
 Unofficial macOS build of Pterodactyl Wings, which runs game servers as host
 processes because macOS cannot run Linux containers.
 
+## What changed
+
+__CHANGELOG__
+
 ## Install
 
 ```

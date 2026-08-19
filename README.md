@@ -278,8 +278,20 @@ Cross-compiling from another platform works too: `GOOS=darwin go build .`
 
 ### After installing
 
-Wings still needs a `config.yml` from your Panel (Admin → Nodes → your node →
-Configuration). Three settings matter for this fork:
+Wings still needs a `config.yml` from your Panel. Create the node first (Admin →
+Nodes → Create Node), then let wings fetch its own configuration:
+
+```bash
+wings configure --panel-url https://panel.example.com --token <token> --node <id>
+```
+
+The node's Configuration tab generates that command for you, token included. On
+macOS this writes `~/pterodactyl/config.yml` and rewrites the directories to
+match, because the Panel emits Linux paths for every node regardless of what it
+runs. That is the whole of the setup; the rest of this section is what those
+settings mean, and what to change if you copy the YAML by hand instead.
+
+Three settings matter for this fork:
 
 ```yaml
 system:
@@ -323,25 +335,33 @@ because something here behaves differently from a Linux install.
 Not 443. An unprivileged process cannot bind a port below 1024, and using 443
 is what pushes people into running wings as root.
 
-**3. Save the config, then fix its paths.** Copy the YAML from the node's
-Configuration tab to `~/pterodactyl/config.yml`, then change the directories.
-The Panel generates Linux defaults, which on macOS live under a root-owned
-`/var`:
+**3. Fetch the config.** Open the node's Configuration tab, press the button to
+generate a token, and run the command it shows you:
+
+```bash
+wings configure --panel-url https://panel.example.com --token <token> --node <id>
+```
+
+That writes `~/pterodactyl/config.yml` with the directories already pointing at
+your home directory, and sets `ignore_panel_config_updates`. Nothing to edit.
+
+If you copy the YAML by hand instead, you must fix the directories yourself. The
+Panel generates Linux defaults, which on macOS live under a root-owned `/var`:
 
 ```yaml
 system:
   root_directory: /Users/you/pterodactyl      # NOT /var/lib/pterodactyl
   data: /Users/you/pterodactyl/volumes
   log_directory: /Users/you/pterodactyl/logs
-  environment: native
 api:
   port: 8443
 ignore_panel_config_updates: true
 ```
 
-If you skip this, wings fails with a permission error, `sudo` makes it go away,
-and you end up running every game server as root with root-owned files you
-cannot read. It is the single easiest way to get into a mess here.
+Skip that and wings fails with a permission error, `sudo` makes it go away, and
+you end up running every game server as root with root-owned files you cannot
+read. It is the single easiest way to get into a mess here, which is why
+`wings configure` now does it for you.
 
 **4. Install what your servers actually run.** There is no container image to
 supply a runtime:
