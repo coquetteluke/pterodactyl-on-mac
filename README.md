@@ -29,13 +29,15 @@ or `--yes` to skip the questions entirely.
 that already has a node and it asks what to do instead: update, reinstall, turn
 isolation on or off, or remove it.
 
-## Status
+## fyi
 
-This was written with heavy AI assistance. I am not a Go developer and I do not
-really know GitHub. It is genuinely tested, and the tests are real ones, but
-read it before you trust it with anything you care about.
+This was written like completely with claude code. I am not a Go developer and I do not
+really know GitHub too well. It is tested by me on my macbook; but please, be careful
+when using this!! 
 
-Bug reports are very welcome. Active maintenance is not promised.
+Bug reports are very welcome. I don't know if I'm going to be maintaining this but i
+probably will. Idk I have ocd like I can't just let a bug go free without me (claude code)
+fixing it.
 
 ## ⚠️ Before you deploy it
 
