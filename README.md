@@ -3,7 +3,7 @@
 Run Pterodactyl game servers natively on macOS. No virtual machine, no Docker.
 
 An **unofficial** fork of [Pterodactyl Wings](https://github.com/pterodactyl/wings),
-tracking **v1.13.2**. Not affiliated with or endorsed by the Pterodactyl project.
+tracking **v1.13.3**. Not affiliated with or endorsed by the Pterodactyl project.
 
 ## Quick start
 

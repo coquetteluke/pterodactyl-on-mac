@@ -5,7 +5,7 @@
 Releases of **Pterodactyl on Mac** are listed on the
 [releases page](https://github.com/coquetteluke/pterodactyl-on-mac/releases),
 which is where the notes for each tagged version live. Tags are of the form
-`v1.13.2-mac.N`, where the first part is the upstream Wings version being
+`v1.13.3-mac.N`, where the first part is the upstream Wings version being
 tracked and `N` counts releases of this fork against it.
 
 Everything below this line is upstream Pterodactyl Wings' changelog, kept for

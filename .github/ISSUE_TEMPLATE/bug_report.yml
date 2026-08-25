@@ -19,7 +19,7 @@ body:
     attributes:
       label: Wings version
       description: Output of `wings version`, or `~/.local/bin/wings version`.
-      placeholder: wings v1.13.2-mac.16
+      placeholder: wings v1.13.3-mac.1
     validations:
       required: true
 
