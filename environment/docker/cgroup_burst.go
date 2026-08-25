@@ -60,10 +60,12 @@ func resolveCgroupCpuFile(procCgroup string, v2 bool) (string, error) {
 }
 
 // writeCpuBurst writes a burst value in microseconds into the cpu cgroup of the
-// given process. This is expected to fail on kernels older than 5.14 or when the
-// cgroup hierarchy is not writable by Wings, so failures are only logged.
+// given process. It does nothing off Linux, where there is no cgroup hierarchy
+// belonging to the same kernel as the container. Elsewhere it is expected to fail
+// on kernels older than 5.14 or when the hierarchy is not writable by Wings, so
+// failures are only logged.
 func writeCpuBurst(l *log.Entry, pid int, burst int64) {
-	if pid <= 0 {
+	if !cgroupBurstSupported || pid <= 0 {
 		return
 	}
 	if err := writeBurstFile(pid, burst); err != nil {
