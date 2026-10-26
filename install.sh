@@ -31,6 +31,9 @@ LABEL="${WINGS_LABEL:-com.github.pterodactyl-on-mac}"
 # or newer, which composer refuses outright, so pin the version rather than
 # letting people discover that the hard way.
 PHP_FORMULA="php@8.3"
+# The first 8.3 release fixing the PHP2Shell remote code execution bugs,
+# CVE-2026-109618 and CVE-2026-109619, which are exploited in the wild.
+PHP_MIN_VERSION="8.3.36"
 
 info()  { printf '\033[1;34m==>\033[0m %s\n' "$1"; }
 warn()  { printf '\033[1;33m warning:\033[0m %s\n' "$1" >&2; }
@@ -152,7 +155,8 @@ below instead if you are scripting it.
 
     --turn-isolation-on    turn isolation on for an existing install
     --turn-isolation-off   turn it back off, handing the server files back
-    --update               replace wings with the latest release and restart it
+    --update               replace wings with the latest release and restart it,
+                           and patch the Panel's PHP if this Mac runs one
     --uninstall            remove wings, keeping your server data
     --purge                remove wings and the server data too
 
@@ -204,14 +208,15 @@ interview() {
 
   case "$ACTION" in
     update)
+      update_panel_php
       update_wings
       exit 0
       ;;
-    isolate)
-      exec sudo "$(fetch_helper isolate.sh pterodactyl-isolate)"
-      ;;
-    revert)
-      exec sudo "$(fetch_helper isolate.sh pterodactyl-isolate)" --revert
+    isolate|revert)
+      # Assigned first: a die inside $(...) only exits the subshell.
+      local helper; helper=$(fetch_helper isolate.sh pterodactyl-isolate)
+      if [ "$ACTION" = revert ]; then exec sudo "$helper" --revert; fi
+      exec sudo "$helper"
       ;;
     uninstall)
       local u; u=$(fetch_helper uninstall.sh pterodactyl-uninstall)
@@ -404,8 +409,65 @@ rand_string() {
   printf '%s' "${s:0:n}"
 }
 
+# secure_php brings the Panel's PHP up to a release without known remote code
+# execution bugs, and turns off session upload progress, the path both PHP2Shell
+# bugs and the still unfixed CVE-2026-115560 are reached through. The Panel does
+# not use upload progress, so nothing is lost.
+#
+# Returns non-zero when PHP is still older than PHP_MIN_VERSION afterwards,
+# which happens when Homebrew has not shipped the fixed release yet. The
+# mitigation is written either way.
+secure_php() {  # brew prefix
+  local bp=$1 php ini_dir
+  php="${bp}/opt/${PHP_FORMULA}/bin/php"
+
+  # `brew install` leaves an already installed, outdated formula alone, so an
+  # existing Mac would otherwise keep its vulnerable PHP.
+  if [ -n "$(brew outdated --quiet "$PHP_FORMULA" 2>/dev/null || true)" ]; then
+    info "Upgrading ${PHP_FORMULA} to fix CVE-2026-109618 and CVE-2026-109619"
+    brew upgrade "$PHP_FORMULA" >/dev/null || warn "brew upgrade ${PHP_FORMULA} failed"
+  fi
+
+  ini_dir="${bp}/etc/php/${PHP_FORMULA#php@}/conf.d"
+  mkdir -p "$ini_dir"
+  cat > "${ini_dir}/zz-pterodactyl-security.ini" <<'INI'
+; Written by the pterodactyl-on-mac installer. Mitigates CVE-2026-109619 and
+; CVE-2026-115560; the Panel does not use session upload progress.
+session.upload_progress.enabled = 0
+INI
+
+  # php-fpm only reads its binary and ini files at startup.
+  if brew services list 2>/dev/null | awk -v f="$PHP_FORMULA" '$1 == f && $2 == "started" {found=1} END {exit !found}'; then
+    brew services restart "$PHP_FORMULA" >/dev/null 2>&1 || warn "could not restart ${PHP_FORMULA}; run: brew services restart ${PHP_FORMULA}"
+  fi
+
+  "$php" -r "exit(version_compare(PHP_VERSION, '${PHP_MIN_VERSION}', '>=') ? 0 : 1);"
+}
+
+# update_panel_php patches PHP on a Mac that runs the Panel. It is part of
+# updating so that existing installs pick up security fixes, not only new ones.
+update_panel_php() {
+  command -v brew >/dev/null 2>&1 || return 0
+  [ -f "${PANEL_DIR}/artisan" ] || return 0
+  local bp; bp=$(brew_prefix)
+  [ -x "${bp}/opt/${PHP_FORMULA}/bin/php" ] || return 0
+
+  if secure_php "$bp"; then
+    info "Panel PHP is $("${bp}/opt/${PHP_FORMULA}/bin/php" -r 'echo PHP_VERSION;'), patched against CVE-2026-109618 and CVE-2026-109619"
+  else
+    warn "Panel PHP is still $("${bp}/opt/${PHP_FORMULA}/bin/php" -r 'echo PHP_VERSION;'), which is vulnerable to CVE-2026-109618 and CVE-2026-109619. Session upload progress has been turned off as a stopgap; run 'brew update && brew upgrade ${PHP_FORMULA}' as soon as ${PHP_MIN_VERSION} is available"
+  fi
+}
+
 install_panel() {
   command -v brew >/dev/null 2>&1 || die "Homebrew is required for the Panel: https://brew.sh"
+
+  # Checked before anything else: the database step below resets the panel
+  # user's password, which would lock an existing Panel out of its database.
+  if [ -d "${PANEL_DIR}/.git" ] || [ -f "${PANEL_DIR}/artisan" ]; then
+    die "a Panel already exists at ${PANEL_DIR}; remove it or set PANEL_DIR to install elsewhere"
+  fi
+
 
   local bp php composer_bin
   bp=$(brew_prefix)
@@ -415,6 +477,7 @@ install_panel() {
 
   php="${bp}/opt/${PHP_FORMULA}/bin/php"
   [ -x "$php" ] || die "expected PHP at ${php} after installing ${PHP_FORMULA}"
+  secure_php "$bp" || die "PHP $("$php" -r 'echo PHP_VERSION;') is vulnerable to CVE-2026-109618 and CVE-2026-109619; ${PHP_MIN_VERSION} or newer is required. Run: brew update && brew upgrade ${PHP_FORMULA}"
   composer_bin=$(command -v composer) || die "composer not found after install"
   info "Using $("$php" -r 'echo PHP_VERSION;')"
 
@@ -442,10 +505,6 @@ GRANT ALL PRIVILEGES ON panel.* TO 'pterodactyl'@'127.0.0.1';
 FLUSH PRIVILEGES;
 SQL
 
-  if [ -d "${PANEL_DIR}/.git" ] || [ -f "${PANEL_DIR}/artisan" ]; then
-    die "a Panel already exists at ${PANEL_DIR}; remove it or set PANEL_DIR to install elsewhere"
-  fi
-
   info "Downloading the Panel"
   mkdir -p "$PANEL_DIR"
   curl -fsSL "https://github.com/pterodactyl/panel/releases/latest/download/panel.tar.gz" \
@@ -460,18 +519,20 @@ SQL
   local url
   url="http://$(hostname -s).local:${PANEL_PORT}"
   ( cd "$PANEL_DIR"
-    cp -n .env.example .env
-    "$php" artisan key:generate --force --no-interaction >/dev/null
+    # Chained with &&: set -e does not apply on the left of ||, so without it
+    # only the last step's failure would be noticed.
+    { [ -f .env ] || cp .env.example .env; } &&
+    "$php" artisan key:generate --force --no-interaction >/dev/null &&
     "$php" artisan p:environment:setup \
       --author="admin@$(hostname -s).local" \
       --url="$url" \
       --timezone="$(readlink /etc/localtime | sed 's|.*/zoneinfo/||')" \
       --cache=file --session=database --queue=database \
-      --settings-ui=true --telemetry=false --no-interaction >/dev/null
+      --settings-ui=true --telemetry=false --no-interaction >/dev/null &&
     "$php" artisan p:environment:database \
       --host=127.0.0.1 --port=3306 --database=panel \
-      --username=pterodactyl --password="$dbpass" --no-interaction >/dev/null
-    "$php" artisan migrate --seed --force --no-interaction >/dev/null
+      --username=pterodactyl --password="$dbpass" --no-interaction >/dev/null &&
+    "$php" artisan migrate --seed --force --no-interaction >/dev/null &&
     "$php" artisan p:user:make \
       --email="admin@$(hostname -s).local" --username=admin \
       --name-first=Admin --name-last=User \
@@ -790,6 +851,13 @@ install_wings
 # step builds the LaunchDaemon from it, and --revert puts it back afterwards.
 if [ "$LAUNCHAGENT" = 1 ] || [ "$ISOLATE" = 1 ]; then
   write_wings_launchagent
+  # launchd loads every plist in ~/Library/LaunchAgents at login, so one that
+  # is only there for the isolate step would otherwise start wings anyway.
+  if [ "$LAUNCHAGENT" = 1 ]; then
+    launchctl enable "gui/$(id -u)/${LABEL}" 2>/dev/null || true
+  else
+    launchctl disable "gui/$(id -u)/${LABEL}" 2>/dev/null || true
+  fi
 fi
 
 if [ "$ISOLATE" = 1 ]; then

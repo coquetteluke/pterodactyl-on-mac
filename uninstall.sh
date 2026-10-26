@@ -56,14 +56,24 @@ done
 
 adopt_existing_install || true
 
+# Asked before anything is touched, so that answering no really does leave
+# everything as it was.
+if [ "$PURGE" = 1 ]; then
+  confirm_purge
+fi
+
+# Wings goes first: it treats a server exiting under it as a crash and starts it
+# again, which would leave that server running with nothing supervising it.
+stop_wings
 stop_servers
 remove_wings
-if [ "$FULL" = 1 ]; then
+# --purge deletes the Panel directory, so its services have to go too or they
+# keep restarting against an artisan that no longer exists.
+if [ "$FULL" = 1 ] || { [ "$PURGE" = 1 ] && [ -d "$PANEL_DIR" ]; }; then
   remove_panel
 fi
 
 if [ "$PURGE" = 1 ]; then
-  confirm_purge
   purge_data
 fi
 
@@ -97,26 +107,30 @@ adopt_existing_install() {
 # otherwise leave a game server running with nothing supervising it, which is
 # the one thing an uninstall must not do.
 stop_servers() {
-  local runtime="${DATA_DIR}/native" pidfile pid stopped=0
+  local runtime="${DATA_DIR}/native" pidfile pid sig stopped=0
   [ -d "$runtime" ] || return 0
 
   for pidfile in "$runtime"/*/pid; do
     [ -f "$pidfile" ] || continue
     pid=$(awk '{print $1; exit}' "$pidfile" 2>/dev/null || true)
     [ -n "${pid:-}" ] && [ "$pid" -gt 0 ] 2>/dev/null || continue
-    kill -0 "$pid" 2>/dev/null || continue
+    # With isolation on, servers run as their own accounts, so kill -0 fails
+    # with EPERM for a live process; ps tells the two apart.
+    ps -p "$pid" >/dev/null 2>&1 || continue
+    sig=""
+    kill -0 "$pid" 2>/dev/null || sig=sudo
 
     info "Stopping server process $pid"
     # Negative pid signals the whole process group, so a shell wrapper does not
     # leave the real server behind.
-    kill -TERM "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+    $sig kill -TERM "-$pid" 2>/dev/null || $sig kill -TERM "$pid" 2>/dev/null || true
     for _ in $(seq 1 60); do
-      kill -0 "$pid" 2>/dev/null || break
+      ps -p "$pid" >/dev/null 2>&1 || break
       sleep 1
     done
-    if kill -0 "$pid" 2>/dev/null; then
+    if ps -p "$pid" >/dev/null 2>&1; then
       warn "server $pid did not stop gracefully; killing it"
-      kill -KILL "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+      $sig kill -KILL "-$pid" 2>/dev/null || $sig kill -KILL "$pid" 2>/dev/null || true
     fi
     stopped=$((stopped + 1))
   done
@@ -126,18 +140,31 @@ stop_servers() {
   return 0
 }
 
-remove_wings() {
+# stop_wings unloads wings, as a LaunchAgent or a LaunchDaemon, without
+# removing anything yet.
+stop_wings() {
   local uid; uid=$(id -u)
   if launchctl print "gui/${uid}/${LABEL}" >/dev/null 2>&1; then
     info "Unloading the wings LaunchAgent"
     launchctl bootout "gui/${uid}/${LABEL}" 2>/dev/null || true
   fi
-  rm -f "$HOME/Library/LaunchAgents/${LABEL}.plist"
-
-  remove_isolation
+  # A LaunchDaemon means wings was installed with --isolate.
+  if [ -f "/Library/LaunchDaemons/${LABEL}.plist" ]; then
+    info "Unloading the wings LaunchDaemon"
+    sudo launchctl bootout "system/${LABEL}" 2>/dev/null || true
+  fi
 
   # Anything still running from a previous session.
   pkill -f "${PREFIX}/wings" 2>/dev/null || true
+}
+
+remove_wings() {
+  local uid; uid=$(id -u)
+  rm -f "$HOME/Library/LaunchAgents/${LABEL}.plist"
+  # Cleared so a later reinstall is not left disabled by isolation.
+  launchctl enable "gui/${uid}/${LABEL}" 2>/dev/null || true
+
+  remove_isolation
 
   if [ -f "${PREFIX}/wings" ]; then
     rm -f "${PREFIX}/wings"
@@ -152,10 +179,14 @@ remove_wings() {
 # edit would keep referencing an anchor that no longer gets populated and the
 # accounts would linger as orphaned uids.
 remove_isolation() {
-  # A LaunchDaemon means wings was installed with --isolate.
+  # Every step needs sudo, so skip all of it on a node that was never isolated,
+  # rather than asking for a password for nothing or, with no terminal, failing.
+  if [ ! -f "/Library/LaunchDaemons/${LABEL}.plist" ] && [ ! -f /etc/pf.anchors/com.pterodactyl.wings ] \
+    && [ ! -f /etc/pf.conf.wings-backup ] && ! dscl . -list /Users 2>/dev/null | grep -q '^ptero-'; then
+    return 0
+  fi
+
   if [ -f "/Library/LaunchDaemons/${LABEL}.plist" ]; then
-    info "Unloading the wings LaunchDaemon"
-    sudo launchctl bootout "system/${LABEL}" 2>/dev/null || true
     sudo rm -f "/Library/LaunchDaemons/${LABEL}.plist"
   fi
 
@@ -173,11 +204,13 @@ remove_isolation() {
   elif sudo grep -q '^anchor "wings"' /etc/pf.conf 2>/dev/null; then
     # Edited by hand rather than by the installer, so remove just our lines.
     info "Removing the wings anchor from /etc/pf.conf"
-    sudo sed -i '' -e '/^anchor "wings"$/d' \
+    # /usr/bin/sed: a GNU sed earlier on the PATH reads -i '' differently.
+    sudo /usr/bin/sed -i '' -e '/^anchor "wings"$/d' \
       -e '\|^load anchor "wings" from "/etc/pf.anchors/com.pterodactyl.wings"$|d' \
-      -e '/^# Added by the Pterodactyl on Mac installer/d' /etc/pf.conf
+      -e '/^# Added by pterodactyl-on-mac\. Without these/d' \
+      -e '/^# loaded but never evaluated\.$/d' /etc/pf.conf
   fi
-  sudo rm -f /etc/pf.anchors/com.pterodactyl.wings
+  sudo rm -f /etc/pf.anchors/com.pterodactyl.wings || true
 
   remove_server_accounts
 }
@@ -260,7 +293,9 @@ EOF
 purge_data() {
   local bp
   if [ -d "$DATA_DIR" ]; then
-    rm -rf "$DATA_DIR"
+    # Files owned by per-server accounts, or by wings running as root, cannot
+    # be deleted as this user.
+    rm -rf "$DATA_DIR" 2>/dev/null || sudo rm -rf "$DATA_DIR"
     info "Deleted ${DATA_DIR}"
   fi
   if [ -d "$PANEL_DIR" ]; then

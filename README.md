@@ -181,7 +181,12 @@ Three things it deliberately does differently from the Linux install guide, all
 of which will otherwise waste your afternoon:
 
 - **PHP is pinned to 8.3.** Panel 1.15 accepts `^8.2 || ^8.3`, and Homebrew's
-  unversioned `php` is 8.4 or newer, which composer refuses outright.
+  unversioned `php` is 8.4 or newer, which composer refuses outright. It has
+  to be **8.3.36 or newer**, which fixes the PHP2Shell remote code execution
+  bugs (CVE-2026-109618 and CVE-2026-109619). The installer upgrades an older
+  PHP and turns off session upload progress, which the Panel does not use, as
+  extra cover. If you already run the Panel, run the install command again
+  and pick **update** (or pass `--update`) to get the fix.
 - **No Redis.** Homebrew's current Redis build aborts on startup over a broken
   module path in its own shipped config. The Panel runs perfectly well on the
   file cache and database queue, so it is simply not installed.
