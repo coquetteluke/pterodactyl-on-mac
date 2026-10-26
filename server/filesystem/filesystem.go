@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -64,8 +65,25 @@ func New(root string, size int64, denylist []string, owner Owner) (*Filesystem, 
 
 		diskCheckInterval: time.Duration(config.Get().System.DiskCheckInterval),
 		lastLookupTime:    &usageLookupTime{},
-		denylist:          ignore.CompileIgnoreLines(denylist...),
+		denylist:          ignore.CompileIgnoreLines(foldDenylistCase(denylist)...),
 	}, nil
+}
+
+// darwin volumes are case-insensitive by default, so "SERVER.JAR" is the same
+// file as "server.jar" there, while the denylist's gitignore matching is not.
+// Both sides are lower-cased so that a different spelling cannot reach a
+// protected file. On a case-sensitive volume this only makes the list stricter.
+var foldPathCase = runtime.GOOS == "darwin"
+
+func foldDenylistCase(patterns []string) []string {
+	if !foldPathCase {
+		return patterns
+	}
+	out := make([]string, len(patterns))
+	for i, p := range patterns {
+		out[i] = strings.ToLower(p)
+	}
+	return out
 }
 
 // DefaultOwner returns the system-wide server user configured for this node.

@@ -16,7 +16,11 @@ func (fs *Filesystem) IsIgnored(paths ...string) error {
 		//	return err
 		//}
 		// TODO: update logic to use unixFS
-		if fs.denylist.MatchesPath(p) {
+		match := p
+		if foldPathCase {
+			match = strings.ToLower(p)
+		}
+		if fs.denylist.MatchesPath(match) {
 			return errors.WithStack(&Error{code: ErrCodeDenylistFile, path: p, resolved: p})
 		}
 	}

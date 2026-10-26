@@ -8,6 +8,7 @@ import (
 	"os/user"
 	"strconv"
 	"strings"
+	"sync"
 
 	"emperror.dev/errors"
 	"github.com/apex/log"
@@ -38,7 +39,16 @@ func lookup(name string) (Account, bool, error) {
 	return Account{Username: name, UID: uid, GID: gid}, true, nil
 }
 
+// ensureMu serializes account creation. Servers are provisioned in parallel at
+// boot, and allocateID reads the ids in use before dscl creates the new one, so
+// two servers whose hashes land on the same slot could otherwise both be given
+// it, and be able to read each other's files.
+var ensureMu sync.Mutex
+
 func ensure(uuid string) (Account, error) {
+	ensureMu.Lock()
+	defer ensureMu.Unlock()
+
 	name := Name(uuid)
 	if acct, ok, err := lookup(name); err != nil {
 		return Account{}, err

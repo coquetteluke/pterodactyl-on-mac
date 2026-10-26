@@ -150,6 +150,10 @@ func Ruleset(rules []Rule) (string, error) {
 			fmt.Fprintf(&b, "pass out quick proto { tcp udp } from any to %s user %d keep state\n", d, r.UID)
 		}
 
+		// self is every address on the host's interfaces, including public
+		// and global v6 ones the private ranges do not cover, so the server
+		// cannot reach the Wings API or SFTP through those either.
+		fmt.Fprintf(&b, "block drop out quick from any to self user %d\n", r.UID)
 		for _, cidr := range privateRanges {
 			fmt.Fprintf(&b, "block drop out quick from any to %s user %d\n", cidr, r.UID)
 		}

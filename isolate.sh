@@ -166,6 +166,10 @@ run this again. Isolation has to be written into that file, and it does not
 exist until the node does."
   fi
 
+  # Checked before wings is stopped, so a config that cannot be switched over
+  # leaves wings running rather than down.
+  grep -q "^ *per_server:" "$CONFIG" || die "${CONFIG} has no per_server setting; start wings with it once so it writes its defaults, then run this again"
+
   add_pf_anchor
 
   info "Stopping wings (servers keep running; they are detached from it)"
@@ -175,9 +179,11 @@ exist until the node does."
   if [ -f "$AGENT_PLIST" ]; then
     info "Moving wings to a LaunchDaemon so it can run as root"
     cp "$AGENT_PLIST" "$DAEMON_PLIST"
-    # Keep the agent around: --revert puts it straight back.
+    # Keep the agent around: --revert puts it straight back. Disabled so that
+    # it does not also start a second wings, as the user, at the next login.
     chown root:wheel "$DAEMON_PLIST"
     chmod 644 "$DAEMON_PLIST"
+    launchctl disable "gui/${OWNER_UID}/${LABEL}" 2>/dev/null || true
   fi
   plutil -lint "$DAEMON_PLIST" >/dev/null || die "the generated ${DAEMON_PLIST} is malformed"
 
@@ -275,6 +281,12 @@ Stop them from the Panel first, then run this again.
 Or pass --force to stop them abruptly and revert anyway."
   fi
 
+  info "Turning isolation off"
+
+  # Stopped first: wings treats a server exiting under it as a crash and starts
+  # it again.
+  launchctl bootout "system/${LABEL}" 2>/dev/null || true
+
   if [ -n "$running" ]; then
     warn "stopping running servers because --force was given"
     echo "$running" | while read -r pid; do
@@ -291,10 +303,6 @@ Or pass --force to stop them abruptly and revert anyway."
     done
   fi
 
-  info "Turning isolation off"
-
-  launchctl bootout "system/${LABEL}" 2>/dev/null || true
-
   # Drop the rules. pf itself is left running: Internet Sharing and some VPN
   # clients enable it too, and disabling it outright would break them.
   pfctl -a wings -F rules >/dev/null 2>&1 || true
@@ -309,11 +317,15 @@ Or pass --force to stop them abruptly and revert anyway."
   # handed back before those accounts are deleted. Otherwise every file ends up
   # owned by a uid with no account behind it, and a later reinstall would hand
   # those uids to different servers.
+  # Done even with no accounts: wings ran as root, so its logs and runtime
+  # files are root's too, and wings as ${OWNER} could not open them.
+  if [ -d "$DATA_DIR" ]; then
+    info "Returning server files to ${OWNER} (this can take a moment)"
+    chown -R "${OWNER_UID}:${OWNER_GID}" "$DATA_DIR"
+  fi
   local accounts
   accounts=$(dscl . -list /Users 2>/dev/null | grep '^ptero-' || true)
   if [ -n "$accounts" ]; then
-    info "Returning server files to ${OWNER} (this can take a moment)"
-    [ -d "$DATA_DIR" ] && chown -R "${OWNER_UID}:${OWNER_GID}" "$DATA_DIR"
     while IFS= read -r acct; do
       [ -n "$acct" ] || continue
       dscl . -delete "/Users/${acct}" 2>/dev/null || true
@@ -332,6 +344,7 @@ Or pass --force to stop them abruptly and revert anyway."
 
   if [ -f "$AGENT_PLIST" ]; then
     info "Starting wings again as ${OWNER}"
+    launchctl enable "gui/${OWNER_UID}/${LABEL}" 2>/dev/null || true
     launchctl bootstrap "gui/${OWNER_UID}" "$AGENT_PLIST" 2>/dev/null || true
     wait_for_wings || warn "wings did not come back up; log in as ${OWNER} and run:
     launchctl bootstrap gui/${OWNER_UID} ${AGENT_PLIST}"

@@ -6,7 +6,7 @@
 # that for no reason. Same goes for docker-compose.example.yml.
 #
 # Stage 1 (Build)
-FROM golang:1.24.11-alpine AS builder
+FROM golang:1.26.10-alpine AS builder
 
 ARG VERSION
 RUN apk add --update --no-cache git make mailcap

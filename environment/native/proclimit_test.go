@@ -3,6 +3,7 @@
 package native
 
 import (
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -42,6 +43,20 @@ func TestProcessLimitAppliedWithDedicatedAccount(t *testing.T) {
 	// worked, which defeats the point of having it.
 	if !strings.Contains(got, "exit 1") {
 		t.Errorf("expected the boot to fail if the limit cannot be set, got %q", got)
+	}
+	// The server has to replace the shell, or a stop signal ends the shell
+	// and the supervisor with it while the server is still shutting down.
+	if !strings.Contains(got, "\nexec /bin/sh -c 'run'") {
+		t.Errorf("expected the startup command to be exec'd, got %q", got)
+	}
+}
+
+func TestShellQuoteRoundTrips(t *testing.T) {
+	for _, s := range []string{"run", "java -jar 'a b'.jar", `echo "$HOME" \ it's`, ""} {
+		out, err := exec.Command("/bin/sh", "-c", "printf %s "+shellQuote(s)).Output()
+		if err != nil || string(out) != s {
+			t.Errorf("shellQuote(%q) came back as %q (%v)", s, out, err)
+		}
 	}
 }
 

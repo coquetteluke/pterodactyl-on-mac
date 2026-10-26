@@ -184,6 +184,15 @@ func (s *Server) onBeforeStart() error {
 	// and process resource limits are correctly applied.
 	s.SyncWithEnvironment()
 
+	// The firewall policy is otherwise only loaded when wings boots, so a server
+	// created or transferred here since then, or given a new allocation, would
+	// run without its rules. Refuse to start rather than run unconfined.
+	if s.applyNetworkIsolation != nil {
+		if err := s.applyNetworkIsolation(); err != nil {
+			return errors.WithMessage(err, "unable to apply network isolation")
+		}
+	}
+
 	// If a server has unlimited disk space, we don't care enough to block the startup to check remaining.
 	// However, we should trigger a size anyway, as it'd be good to kick it off for other processes.
 	if s.DiskSpace() <= 0 {

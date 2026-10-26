@@ -169,13 +169,15 @@ func (e *Environment) Attach(ctx context.Context) error {
 
 	go func() {
 		defer func() {
+			// Only clear what is still this attachment's: a newer Attach may
+			// already have replaced it, and closing that would cut off its stdin.
 			e.mu.Lock()
-			if e.stdin != nil {
-				_ = e.stdin.Close()
+			if e.stdin == stdin {
 				e.stdin = nil
+				e.cancelAttach = nil
 			}
-			e.cancelAttach = nil
 			e.mu.Unlock()
+			_ = stdin.Close()
 		}()
 
 		go func() {
@@ -198,8 +200,11 @@ func (e *Environment) Attach(ctx context.Context) error {
 
 // detach tears down the console stream and resource polling.
 func (e *Environment) detach() {
+	// Cleared here rather than left to the attach goroutine, so that IsAttached
+	// is false as soon as this returns and an immediate restart attaches anew.
 	e.mu.Lock()
 	cancel := e.cancelAttach
+	e.cancelAttach = nil
 	e.mu.Unlock()
 
 	if cancel != nil {

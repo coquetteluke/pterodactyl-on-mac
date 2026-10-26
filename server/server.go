@@ -43,6 +43,11 @@ type Server struct {
 	// The crash handler for this server instance.
 	crasher CrashHandler
 
+	// applyNetworkIsolation rebuilds the node's firewall policy. It is set by
+	// the Manager, which knows every server, and is nil for a server that has
+	// not been given one.
+	applyNetworkIsolation func() error
+
 	resources   ResourceUsage
 	Environment environment.ProcessEnvironment `json:"-"`
 

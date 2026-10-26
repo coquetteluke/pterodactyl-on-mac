@@ -7,11 +7,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"text/template"
 
 	"emperror.dev/errors"
 
 	"github.com/pterodactyl/wings/config"
+	"github.com/pterodactyl/wings/internal/serveruser"
 	"github.com/pterodactyl/wings/system"
 )
 
@@ -59,6 +61,30 @@ func (ip *InstallationProcess) executeNative() error {
 		return err
 	}
 
+	account, err := ip.installAccount()
+	if err != nil {
+		return err
+	}
+	if account != nil {
+		// The script runs as the server's account, so that account has to be
+		// able to read it and to write the files it installs.
+		base := filepath.Clean(config.Get().System.TmpDirectory) + string(os.PathSeparator)
+		for _, p := range []string{ip.tempDir(), scriptPath} {
+			// Both are derived from the server's id. Refuse anything that
+			// would land outside the temporary directory rather than chown it.
+			p = filepath.Clean(p)
+			if !strings.HasPrefix(p, base) {
+				return errors.New("install: refusing to chown a path outside the temporary directory: " + p)
+			}
+			if err := os.Chown(p, account.UID, account.GID); err != nil {
+				return errors.Wrap(err, "install: failed to hand the installation script to the server's account")
+			}
+		}
+		if err := ip.Server.Filesystem().Chown("/"); err != nil {
+			return errors.WithMessage(err, "install: failed to hand the server's files to its account")
+		}
+	}
+
 	interpreter := resolveInterpreter(ip.Script.Entrypoint)
 	ip.Server.Log().
 		WithField("install_script", scriptPath).
@@ -87,8 +113,27 @@ func (ip *InstallationProcess) executeNative() error {
 	cmd.Env = ip.nativeEnvironment()
 	cmd.Stdout = io.MultiWriter(logFile, pw)
 	cmd.Stderr = io.MultiWriter(logFile, pw)
+	// Its own process group, so that cancelling the install, and finishing it,
+	// can take anything the script left running in the background with it.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	if account != nil {
+		// With per-server accounts wings runs as root, and an install script
+		// is egg code fed with user-set variables. Running it as root would
+		// hand it the whole machine, so it gets the server's account, exactly
+		// as the server process does.
+		cmd.SysProcAttr.Credential = &syscall.Credential{
+			Uid: uint32(account.UID),
+			Gid: uint32(account.GID),
+		}
+	}
 
 	runErr := cmd.Run()
+	if cmd.Process != nil {
+		// The group cannot be reused while any member is alive, and once none
+		// is this fails with ESRCH, so it cannot reach anything else.
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
 
 	// Stop the scanner and wait for it to drain before returning, so the last
 	// lines of output are not lost.
@@ -104,6 +149,25 @@ func (ip *InstallationProcess) executeNative() error {
 		return errors.Wrap(runErr, "install: failed to run installation script")
 	}
 	return nil
+}
+
+// installAccount returns the account the install script should run as, or nil
+// to run it as wings itself. It matches the account the server process runs as.
+func (ip *InstallationProcess) installAccount() (*serveruser.Account, error) {
+	if !config.Get().System.User.PerServer || os.Geteuid() != 0 {
+		return nil, nil
+	}
+	acct, ok, err := serveruser.Lookup(ip.Server.ID())
+	if err != nil {
+		return nil, errors.WrapIf(err, "install: could not look up the server's account")
+	}
+	if !ok {
+		// InitServer provisions the account before a server can be installed,
+		// so this means it was deleted underneath wings. Refuse rather than
+		// fall back to running the script as root.
+		return nil, errors.New("install: the server's dedicated account does not exist; restart wings to recreate it")
+	}
+	return &acct, nil
 }
 
 // writeNativeScript rewrites the container paths in the install script to the

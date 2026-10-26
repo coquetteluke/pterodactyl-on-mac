@@ -18,6 +18,18 @@ func TestRulesetConfinesPrivateRanges(t *testing.T) {
 	}
 }
 
+// A host's public and global v6 addresses fall outside the private ranges, and
+// would otherwise reach the Wings API and SFTP on the host itself.
+func TestRulesetConfinesHostAddresses(t *testing.T) {
+	got, err := Ruleset([]Rule{{UUID: "abc", UID: 700, Ports: []int{25565}}})
+	if err != nil {
+		t.Fatalf("Ruleset: %v", err)
+	}
+	if !strings.Contains(got, "block drop out quick from any to self user 700") {
+		t.Errorf("missing block for the host's own addresses\n%s", got)
+	}
+}
+
 func TestRulesetAcceptsOnlyAllocatedPorts(t *testing.T) {
 	got, err := Ruleset([]Rule{{UUID: "abc", UID: 700, Ports: []int{25565, 25575}}})
 	if err != nil {

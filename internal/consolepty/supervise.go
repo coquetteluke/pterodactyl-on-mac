@@ -126,7 +126,7 @@ func Run(c Config) (int, error) {
 	// process starts closes the window where a stop arriving early would kill
 	// the supervisor out from under it.
 	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP, syscall.SIGQUIT)
+	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGABRT)
 	defer func() {
 		// Stop first: once it returns the signal package will not send again,
 		// which is what makes closing the channel safe and lets the goroutine

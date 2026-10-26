@@ -237,6 +237,7 @@ func (m *Manager) InitServer(data remote.ServerConfigurationResponse) (*Server, 
 		return nil, err
 	}
 	s.Environment = env
+	s.applyNetworkIsolation = m.ApplyNetworkIsolation
 	s.StartEventListeners()
 
 	// If the server's data directory exists, force disk usage calculation.
