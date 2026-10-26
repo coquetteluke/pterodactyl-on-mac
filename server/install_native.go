@@ -68,7 +68,14 @@ func (ip *InstallationProcess) executeNative() error {
 	if account != nil {
 		// The script runs as the server's account, so that account has to be
 		// able to read it and to write the files it installs.
+		base := filepath.Clean(config.Get().System.TmpDirectory) + string(os.PathSeparator)
 		for _, p := range []string{ip.tempDir(), scriptPath} {
+			// Both are derived from the server's id. Refuse anything that
+			// would land outside the temporary directory rather than chown it.
+			p = filepath.Clean(p)
+			if !strings.HasPrefix(p, base) {
+				return errors.New("install: refusing to chown a path outside the temporary directory: " + p)
+			}
 			if err := os.Chown(p, account.UID, account.GID); err != nil {
 				return errors.Wrap(err, "install: failed to hand the installation script to the server's account")
 			}
