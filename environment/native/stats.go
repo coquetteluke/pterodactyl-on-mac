@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"emperror.dev/errors"
+	"golang.org/x/sys/unix"
 
 	"github.com/pterodactyl/wings/config"
 	"github.com/pterodactyl/wings/environment"
@@ -141,7 +142,10 @@ func (e *Environment) killForMemory(resident, limit uint64) {
 	e.oomKilled = true
 	e.mu.Unlock()
 
-	if err := e.Terminate(context.Background(), "SIGKILL"); err != nil {
+	// Signalled directly rather than through Terminate, which moves through
+	// the stopping state precisely so that crash detection does not fire. An
+	// OOM kill under Docker is a crash, and is reported and restarted as one.
+	if err := e.signalProcess(unix.SIGKILL); err != nil {
 		e.log().WithField("error", err).Error("failed to terminate server that exceeded its memory limit")
 	}
 }

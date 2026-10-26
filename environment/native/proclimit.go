@@ -2,6 +2,7 @@ package native
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/pterodactyl/wings/config"
 )
@@ -41,8 +42,19 @@ func (e *Environment) applyProcessLimit(startup string) string {
 	// Fail the boot rather than run on: a limit that was silently not applied
 	// looks identical to one that was, which is the failure mode worth avoiding
 	// in anything that exists to contain a hostile server.
+	//
+	// The startup command is then exec'd in a fresh shell rather than appended.
+	// sh replaces itself with a lone simple command, which is what keeps the
+	// server itself as the supervisor's child; with the ulimit line in front it
+	// would fork instead, and a stop signal would end the shell, and with it the
+	// supervisor, while the server was still shutting down.
 	return fmt.Sprintf(
-		"ulimit -u %d || { echo 'wings: failed to apply the process limit' >&2; exit 1; }\n%s",
-		limit, startup,
+		"ulimit -u %d || { echo 'wings: failed to apply the process limit' >&2; exit 1; }\nexec /bin/sh -c %s",
+		limit, shellQuote(startup),
 	)
+}
+
+// shellQuote quotes s as a single sh word.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

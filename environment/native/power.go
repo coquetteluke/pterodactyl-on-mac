@@ -94,6 +94,10 @@ func (e *Environment) Start(ctx context.Context) error {
 	// that point.
 	defer func() {
 		if sawError {
+			// Attach may already have run. Left attached, the next Start would
+			// see IsAttached and skip attaching, and run with no stats or
+			// memory limit.
+			e.detach()
 			// If we don't set it to stopping first, you'll trigger crash detection which
 			// we don't want to do at this point since it'll just immediately try to do the
 			// exact same action that lead to it crashing in the first place...
@@ -309,10 +313,6 @@ func (e *Environment) onProcessExit(pid int, code uint32, wait chan struct{}) {
 	e.wait = nil
 	e.mu.Unlock()
 
-	// Release anything blocked in WaitForStop. The pid guard above means this
-	// runs exactly once per process, so the close cannot happen twice.
-	close(wait)
-
 	_ = os.Remove(e.pidPath())
 	e.log().WithField("pid", pid).WithField("exit_code", code).Info("server process exited")
 
@@ -321,6 +321,13 @@ func (e *Environment) onProcessExit(pid int, code uint32, wait chan struct{}) {
 	// it should see a fully stopped environment.
 	e.detach()
 	e.SetState(environment.ProcessOfflineState)
+
+	// Release anything blocked in WaitForStop only now. A restart starts the
+	// next process as soon as this returns, and releasing it any earlier lets
+	// that Start find the old attachment still in place, or have its starting
+	// state overwritten by the offline one above. The pid guard above means
+	// this runs exactly once per process, so the close cannot happen twice.
+	close(wait)
 }
 
 // processEnvironment builds the environment for the server process.
