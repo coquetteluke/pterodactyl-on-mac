@@ -34,7 +34,20 @@ Linux-only syscalls:
   `AT_SYMLINK_NOFOLLOW`, so its `fchmodNoFollow` needs neither.
 - Don't reach for `x/sys/unix.Getdirentries` on darwin. It emulates `getdents`
   by re-opening the directory and skipping N entries per call, which is O(n²).
-  Use `fdopendir` (via `os.File.ReadDir`).
+  Use `fdopendir` (via `os.File.ReadDir`), on a duplicate of the descriptor
+  wrapped with `os.NewFile`.
+- **That is only right from Go 1.25.8 and 1.26.1.** A file made by `os.NewFile`
+  has a label, not a path that leads back to the directory. APFS and HFS+ give
+  every entry a type, but a network or FUSE volume may leave one untyped
+  (`DT_UNKNOWN`), and then `ReadDir` has to stat it. Older releases did that
+  with `lstat(f.Name() + "/" + entry)`, which is looked up in the process's
+  working directory: the entry is dropped when nothing is there, and takes the
+  type of whatever is. Newer ones call `fstatat` on the descriptor. `go.mod`
+  requires 1.26.8, so this tree cannot be built with an affected release, and
+  `TestOSDescribesEntriesThroughDescriptor` fails if a later one goes back. A
+  port with a lower floor has to read the names with `Readdirnames` and
+  `fstatat` each one itself. `DirEntry.Info` on what `ReadDir` returns still
+  goes by path in every release, so use only `Name` and `Type`.
 
 Process accounting for the Panel's graphs uses `proc_info(2)`
 (`PROC_PIDTASKINFO` / `PROC_PIDTBSDINFO`) directly, so there is no cgo
