@@ -301,9 +301,21 @@ func (e *Environment) adopt(pid int) {
 // onProcessExit records the exit of a server process and moves the environment
 // into its offline state.
 func (e *Environment) onProcessExit(pid int, code uint32, wait chan struct{}) {
-	e.mu.Lock()
 	// Guard against a stale goroutine from an earlier process clobbering the
 	// state of a newer one.
+	e.mu.RLock()
+	current := e.pid
+	e.mu.RUnlock()
+	if current != pid {
+		return
+	}
+
+	// The server is not gone until its whole group is. Everything below,
+	// including releasing a restart that is waiting to start the next process,
+	// happens only once it is.
+	e.sweepGroup(pid)
+
+	e.mu.Lock()
 	if e.pid != pid {
 		e.mu.Unlock()
 		return
@@ -312,15 +324,6 @@ func (e *Environment) onProcessExit(pid int, code uint32, wait chan struct{}) {
 	e.exitCode = code
 	e.wait = nil
 	e.mu.Unlock()
-
-	// The supervisor at the head of the group is gone; take anything the server
-	// left running in the group with it. A container does this by itself when
-	// its main process exits. Here a process that was put in the background
-	// would otherwise outlive a server shown as offline, out of reach of the
-	// limits, the kill button, suspension and deletion, all of which give up
-	// once the leader is dead. The group id cannot be reused while a member is
-	// alive, and once none is this fails with ESRCH.
-	_ = unix.Kill(-pid, unix.SIGKILL)
 
 	_ = os.Remove(e.pidPath())
 	e.log().WithField("pid", pid).WithField("exit_code", code).Info("server process exited")
@@ -337,6 +340,48 @@ func (e *Environment) onProcessExit(pid int, code uint32, wait chan struct{}) {
 	// state overwritten by the offline one above. The pid guard above means
 	// this runs exactly once per process, so the close cannot happen twice.
 	close(wait)
+}
+
+// leftoverPollInterval is how often a group whose leader has exited is checked
+// for members that are still finishing.
+const leftoverPollInterval = 100 * time.Millisecond
+
+// leftoverStopGrace is the longest a group is waited on after its leader has
+// exited during a stop. A stop or restart from the Panel gives up and kills
+// after ten minutes, which ends the wait sooner; this only bounds a stop
+// nothing is waiting on.
+var leftoverStopGrace = 15 * time.Minute
+
+// sweepGroup deals with whatever is left in a server's process group once the
+// supervisor at its head has exited.
+//
+// A container takes everything in it down when its main process exits. Here a
+// process the server put in the background would otherwise outlive a server
+// shown as offline, out of reach of its limits, the kill button, suspension and
+// deletion, all of which give up once the leader is dead. So what is left is
+// killed.
+//
+// Unless the server was asked to stop, in which case what is left may well be
+// the server. A startup command that is more than a single program runs under
+// a shell, and a shell dies on a stop signal at once while the program it
+// started is still saving. Killing that half a second later would cost the
+// save. It is given until the stop is abandoned: the kill button, or the
+// timeout of whoever is waiting on the stop, both of which move the state on
+// from stopping.
+//
+// The group id cannot be reused while a member is alive, and once none is the
+// signal fails with ESRCH, so this cannot reach anything else.
+func (e *Environment) sweepGroup(pid int) {
+	deadline := time.Now().Add(leftoverStopGrace)
+	for e.st.Load() == environment.ProcessStoppingState && groupHasMembers(pid) && time.Now().Before(deadline) {
+		time.Sleep(leftoverPollInterval)
+	}
+	_ = unix.Kill(-pid, unix.SIGKILL)
+}
+
+// groupHasMembers reports whether any process is left in the group.
+func groupHasMembers(pgid int) bool {
+	return unix.Kill(-pgid, 0) == nil
 }
 
 // processEnvironment builds the environment for the server process.

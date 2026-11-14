@@ -5,6 +5,8 @@ package native
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -200,6 +202,73 @@ func TestNativeEnvironment_LeftoverProcessesDieWithTheServer(t *testing.T) {
 
 	waitFor(t, "the server to exit by itself", func() bool { return e.State() == environment.ProcessOfflineState })
 	waitFor(t, "the leftover child to be killed", func() bool { return !processIsAlive(childPid) })
+}
+
+// A startup command that is more than one program runs under a shell, and the
+// shell dies on a stop signal straight away while the program it started is
+// still saving. The server is not stopped until that has finished, and it is
+// not killed for outliving its shell.
+func TestNativeEnvironment_StopWaitsForWhatTheShellLeftRunning(t *testing.T) {
+	root := t.TempDir()
+	// The inner shell stands in for a server that takes a second to save when
+	// told to stop. The outer one, which is what the supervisor watches, has
+	// no handler and is gone the moment the signal arrives.
+	startup := `sh -c 'trap "sleep 1; echo saved > saved.txt; exit 0" TERM; echo ready; while :; do sleep 0.1; done' & wait`
+	e := newTestEnvironmentAt(t, root, startup, remote.ProcessStopConfiguration{
+		Type:  remote.ProcessStopSignal,
+		Value: "SIGTERM",
+	})
+	hasLine, _ := startAndCollect(t, e)
+	waitFor(t, "the server to be ready", hasLine("ready"))
+
+	start := time.Now()
+	if err := e.WaitForStop(context.Background(), 30*time.Second, false); err != nil {
+		t.Fatalf("wait for stop: %v", err)
+	}
+	if took := time.Since(start); took < 900*time.Millisecond {
+		t.Fatalf("the stop was reported after %s, before the server had finished saving", took)
+	}
+	if _, err := os.Stat(filepath.Join(root, "servers", "test", "saved.txt")); err != nil {
+		t.Fatalf("the server was killed before it finished saving: %v", err)
+	}
+	if st := e.State(); st != environment.ProcessOfflineState {
+		t.Fatalf("expected the server to be offline once everything had exited, got %s", st)
+	}
+}
+
+// The wait above ends when the stop is abandoned for a kill.
+func TestNativeEnvironment_KillEndsTheWaitForWhatTheShellLeftRunning(t *testing.T) {
+	// Ignores the stop signal entirely, so it would be waited on for good.
+	startup := `sh -c 'trap "" TERM; echo "child:$$"; while :; do sleep 0.1; done' & wait`
+	e := newTestEnvironment(t, startup, remote.ProcessStopConfiguration{
+		Type:  remote.ProcessStopSignal,
+		Value: "SIGTERM",
+	})
+	_, firstLine := startAndCollect(t, e)
+	waitFor(t, "child pid announcement", func() bool { return firstLine() != "" })
+	var childPid int
+	if _, err := fmtSscan(firstLine(), &childPid); err != nil {
+		t.Fatalf("could not parse child pid from %q: %v", firstLine(), err)
+	}
+
+	if err := e.Stop(context.Background()); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	// The shell at the head is gone; what it started is not, and the server
+	// is still stopping.
+	time.Sleep(time.Second)
+	if !processIsAlive(childPid) {
+		t.Fatal("expected the process ignoring the stop signal to still be running")
+	}
+	if st := e.State(); st != environment.ProcessStoppingState {
+		t.Fatalf("expected the server to still be stopping, got %s", st)
+	}
+
+	if err := e.Terminate(context.Background(), "SIGKILL"); err != nil {
+		t.Fatalf("terminate: %v", err)
+	}
+	waitFor(t, "the process to be killed", func() bool { return !processIsAlive(childPid) })
+	waitFor(t, "offline state", func() bool { return e.State() == environment.ProcessOfflineState })
 }
 
 // Shutting wings down ends every server's context. A server that was being
