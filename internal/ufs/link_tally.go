@@ -71,13 +71,24 @@ import (
 // That takes nothing the same process did not need to get past the guard as it
 // was, where Lchownat looks at a name and then acts on the name, and in the
 // same trial was given a different file in between rather more often than
-// that. Wings does all of this while the server is stopped, but it stops a
-// server by its process group, and a process that has left the group is still
-// there. What
-// such a process cannot do under the sandbox profile is make the name for the
-// outside file to begin with, and that is the control this relies on, as the
-// guard does; see internal/sandbox. A name made while the profile was not in
-// force can still be moved.
+// that.
+//
+// How likely such a process is to exist is decided elsewhere. Wings does all
+// of this while the server is stopped, and when a server with an account
+// exits it kills everything running as that account, whichever process group
+// it has moved itself to; see environment/native. Two kinds of process are
+// left. One is what the server's install script put in the background outside
+// of its process group. It runs as the account and is not killed until the
+// server's own process is about to be started, by which time the files have
+// been chowned. The other runs as somebody else, the user the server ran as
+// before it had an account for one. It can move a name only in a directory it
+// may write to, and the walk has just made every directory the account's, so
+// that is a directory others are allowed to write to.
+//
+// What a process started under the sandbox profile cannot do is make the name
+// for the outside file to begin with, and that is the control this relies on,
+// as the guard does; see internal/sandbox. A name made while the profile was
+// not in force, or by a process started without it, can still be moved.
 //
 // A LinkTally is used for one walk and is not safe for concurrent use.
 type LinkTally struct {
