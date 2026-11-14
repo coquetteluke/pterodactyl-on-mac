@@ -238,8 +238,37 @@ func localizeDirectories(cfg *config.Configuration) {
 	}
 	root := filepath.Join(home, "pterodactyl")
 
+	kept := relocateLinuxDefaults(cfg, root)
+
+	// The Panel pushes api.port back to the node's Daemon Port on every save,
+	// which is how a working daemon gets broken later.
+	cfg.IgnorePanelConfigUpdates = true
+
+	for _, p := range kept {
+		fmt.Printf("Keeping %s: it is already in use on this Mac.\n", p)
+	}
+}
+
+// relocateLinuxDefaults points every directory still at one of the Panel's
+// Linux defaults, or not set at all, at its place under root. It returns the
+// defaults it left alone because they are in use.
+//
+// Configuring a node again keeps what is in its file, and that includes a node
+// that really does run from /var/lib/pterodactyl, as one started as root from
+// the Panel's own YAML does. Moving its directories would leave wings looking
+// at empty ones on the next start: no servers to adopt, the running ones shown
+// as offline, and a second copy of each started beside the first. A directory
+// with something in it is taken to be in use.
+func relocateLinuxDefaults(cfg *config.Configuration, root string) (kept []string) {
 	isDefault := func(p string) bool {
 		return p == "" || strings.HasPrefix(p, "/var/") || strings.HasPrefix(p, "/tmp/")
+	}
+	inUse := func(p string) bool {
+		if p == "" {
+			return false
+		}
+		entries, err := os.ReadDir(p)
+		return err == nil && len(entries) > 0
 	}
 
 	rewrote := false
@@ -254,21 +283,23 @@ func localizeDirectories(cfg *config.Configuration) {
 		{&cfg.System.BackupDirectory, filepath.Join(root, "backups")},
 		{&cfg.System.TmpDirectory, filepath.Join(root, "tmp")},
 	} {
-		if isDefault(*d.field) && *d.field != d.to {
-			*d.field = d.to
-			rewrote = true
+		if !isDefault(*d.field) || *d.field == d.to {
+			continue
 		}
+		if inUse(*d.field) {
+			kept = append(kept, *d.field)
+			continue
+		}
+		*d.field = d.to
+		rewrote = true
 	}
-
-	// The Panel pushes api.port back to the node's Daemon Port on every save,
-	// which is how a working daemon gets broken later.
-	cfg.IgnorePanelConfigUpdates = true
 
 	// Configuring a node again keeps the directories already in its file, so
 	// only say so when something was actually rewritten.
 	if rewrote {
 		fmt.Printf("Rewrote the Panel's Linux directory defaults to %s (macOS).\n", root)
 	}
+	return kept
 }
 
 func getRequest() (*http.Request, error) {

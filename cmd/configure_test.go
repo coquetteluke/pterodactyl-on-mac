@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -221,6 +222,43 @@ allowed_mounts:
 	cfg, err := config.Load(path)
 	require.NoError(t, err)
 	require.Empty(t, cfg.AllowedMounts)
+}
+
+// A node already running from the Panel's Linux paths keeps them. Moving the
+// directories of a node that is in use leaves wings looking at empty ones.
+func TestRelocateLinuxDefaultsKeepsDirectoriesInUse(t *testing.T) {
+	// A temporary directory is under /tmp on Linux and /var on macOS, which is
+	// exactly what the Panel's defaults look like.
+	base := t.TempDir()
+	if !strings.HasPrefix(base, "/var/") && !strings.HasPrefix(base, "/tmp/") {
+		t.Skipf("temporary directory %s is not under /var or /tmp", base)
+	}
+	inUse := filepath.Join(base, "volumes")
+	require.NoError(t, os.MkdirAll(filepath.Join(inUse, "a-server"), 0o755))
+	empty := filepath.Join(base, "archives")
+	require.NoError(t, os.Mkdir(empty, 0o755))
+	missing := filepath.Join(base, "backups")
+	root := filepath.Join(t.TempDir(), "home", "pterodactyl")
+
+	cfg := &config.Configuration{}
+	cfg.System.RootDirectory = base
+	cfg.System.Data = inUse
+	cfg.System.ArchiveDirectory = empty
+	cfg.System.BackupDirectory = missing
+	cfg.System.LogDirectory = "/Users/someone/logs"
+
+	kept := relocateLinuxDefaults(cfg, root)
+
+	// In use: left where they are, and reported.
+	require.Equal(t, base, cfg.System.RootDirectory)
+	require.Equal(t, inUse, cfg.System.Data)
+	require.ElementsMatch(t, []string{base, inUse}, kept)
+	// Never used: moved, as before.
+	require.Equal(t, filepath.Join(root, "archives"), cfg.System.ArchiveDirectory)
+	require.Equal(t, filepath.Join(root, "backups"), cfg.System.BackupDirectory)
+	require.Equal(t, filepath.Join(root, "tmp"), cfg.System.TmpDirectory)
+	// Chosen by the operator: not a default, so not looked at.
+	require.Equal(t, "/Users/someone/logs", cfg.System.LogDirectory)
 }
 
 // Configure leaves a node with directories it can use: the Linux defaults stay

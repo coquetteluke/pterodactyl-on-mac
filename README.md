@@ -305,10 +305,14 @@ runs. That is the whole of the setup; the rest of this section is what those
 settings mean, and what to change if you copy the YAML by hand instead.
 
 Running it again on a node that is already configured keeps what is in
-`config.yml` and only refreshes what the Panel owns: the token, the API and SFTP
-ports, the TLS settings, the upload limit and the list of allowed mounts. It used to rebuild the file from
-scratch. Directories still under `/var` or `/tmp` are moved to your home
-directory as before.
+`config.yml` and only refreshes what the Panel owns: the token and node id, the
+Panel URL, the API bind address and port, the SFTP port, the TLS switch and
+certificate paths, the upload limit, debug mode and the list of allowed mounts.
+It used to rebuild the file from scratch. If you bound the API to one address
+or pointed it at your own certificate, put that back afterwards, since the
+Panel's values replace them. Directories still under `/var` or `/tmp` are moved
+to your home directory as before, unless they have something in them, in which
+case they are in use and stay where they are.
 
 Three settings matter for this fork:
 
@@ -633,6 +637,8 @@ What each server ends up with:
 | Loopback, so Wings' API and any local database | **no** |
 | RFC1918 and CGNAT, so the Panel, your LAN, other machines | **no** |
 | Link-local and IPv6 ULA | **no** |
+| Multicast and broadcast, so mDNS, SSDP and other LAN discovery | **no** |
+| Private IPv4 addresses reached through NAT64, 6to4 or Teredo | **no** |
 
 The exceptions in `allow_out` are evaluated before the private-range blocks, so
 listing an address there genuinely reinstates it.
