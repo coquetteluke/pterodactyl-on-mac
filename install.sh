@@ -434,10 +434,12 @@ rand_string() {
   printf '%s' "${s:0:n}"
 }
 
-# secure_php brings the Panel's PHP up to a release without known remote code
-# execution bugs, and turns off session upload progress, the path both PHP2Shell
-# bugs and the still unfixed CVE-2026-115560 are reached through. The Panel does
-# not use upload progress, so nothing is lost.
+# secure_php brings the Panel's PHP up to the release that fixes the PHP2Shell
+# remote code execution bugs, and turns off session upload progress. PHP's
+# advisory for CVE-2026-109619 (GHSA-6wmf-4rv5-p3rp) gives that setting as the
+# mitigation for the session path, and recommends leaving it off even on a
+# patched PHP, since the feature is rarely used and little tested. The Panel
+# does not use upload progress, so nothing is lost.
 #
 # Returns non-zero when PHP is still older than PHP_MIN_VERSION afterwards,
 # which happens when Homebrew has not shipped the fixed release yet. The
@@ -461,8 +463,9 @@ secure_php() {  # brew prefix
   ini_dir="${bp}/etc/php/${PHP_FORMULA#php@}/conf.d"
   mkdir -p "$ini_dir"
   cat > "${ini_dir}/zz-pterodactyl-security.ini" <<'INI'
-; Written by the pterodactyl-on-mac installer. Mitigates CVE-2026-109619 and
-; CVE-2026-115560; the Panel does not use session upload progress.
+; Written by the pterodactyl-on-mac installer. PHP's advisory for
+; CVE-2026-109619 recommends this even on a patched PHP; the Panel does not use
+; session upload progress.
 session.upload_progress.enabled = 0
 INI
 
@@ -583,8 +586,9 @@ write_panel_services() {
   local agents="$HOME/Library/LaunchAgents"
   mkdir -p "$agents" "${PANEL_DIR}/storage/logs"
 
-  # nginx serves the Panel on an unprivileged port; binding 80 or 443 would
-  # need root, which the rest of this install deliberately avoids.
+  # nginx serves the Panel on a high port. Without root, macOS binds 80 or 443
+  # only on the wildcard address, so they would need root as soon as the listen
+  # line named an address, and the rest of this install deliberately avoids root.
   local conf="${bp}/etc/nginx/servers/pterodactyl.conf"
   mkdir -p "$(dirname "$conf")"
 
@@ -916,8 +920,8 @@ $(sed 's/^/    /' "${PANEL_DIR}/CREDENTIALS.txt")
     1. Log in, then Admin -> Locations -> Create, and make one.
     2. Admin -> Nodes -> Create Node.
          FQDN:        $(hostname -s).local     (or this Mac's IP)
-         Daemon Port: 8443                     (not 443: an unprivileged
-                                                process cannot bind it)
+         Daemon Port: 8443                     (not 443: without root that
+                                                only binds on all addresses)
          Behind proxy / SSL: off, unless you have set up TLS yourself.
     3. Open the node's Configuration tab, press the button that generates a
        token, and run the command it gives you:
@@ -965,7 +969,7 @@ $(info "Next steps")
 
   1. In that Panel: Admin -> Nodes -> Create Node.
        FQDN:        this Mac's hostname or IP, reachable from the Panel
-       Daemon Port: 8443  (not 443: an unprivileged process cannot bind it)
+       Daemon Port: 8443  (not 443: without root that only binds on all addresses)
 
   2. Open the node's Configuration tab, press the button that generates a
      token, and run the command it gives you:
