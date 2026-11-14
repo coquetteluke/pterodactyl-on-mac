@@ -101,8 +101,19 @@ func (fs *UnixFS) Chmodat(dirfd int, name string, mode FileMode) error {
 }
 
 func (fs *UnixFS) fchmodat(op string, dirfd int, name string, mode FileMode) error {
-	return ensurePathError(unix.Fchmodat(dirfd, name, uint32(mode), AT_SYMLINK_NOFOLLOW), op, name)
+	err := unix.Fchmodat(dirfd, name, uint32(mode), AT_SYMLINK_NOFOLLOW)
+	if err == unix.EOPNOTSUPP {
+		// Kernels before 6.6 do not support fchmodat2, which is needed to pass
+		// AT_SYMLINK_NOFOLLOW.
+		err = fchmodNoFollow(dirfd, name, uint32(mode))
+	}
+	return ensurePathError(err, op, name)
 }
+
+// fchmodNoFollow is defined per-GOOS. On Linux it reaches the file through an
+// O_PATH descriptor and procfs, neither of which exist on darwin. darwin's
+// fchmodat honors AT_SYMLINK_NOFOLLOW natively, so the fallback above is not
+// expected to be taken there.
 
 // Chown changes the numeric uid and gid of the named file.
 //
@@ -521,17 +532,48 @@ func (fs *UnixFS) Rename(oldpath, newpath string) error {
 	return nil
 }
 
-// Stat returns a FileInfo describing the named file.
+// Stat returns a FileInfo describing the named file. If the file is a symbolic
+// link, the file it refers to is described, as long as that file is inside the
+// filesystem.
 //
 // If there is an error, it will be of type *PathError.
 func (fs *UnixFS) Stat(name string) (FileInfo, error) {
-	return fs._fstat("stat", name, 0)
+	info, err := fs.Lstat(name)
+	if err != nil || info.Mode()&ModeSymlink == 0 {
+		return info, err
+	}
+	return fs.statFollow(name)
 }
 
-// Statat is like Stat but allows passing an existing directory file
-// descriptor rather than needing to resolve one.
-func (fs *UnixFS) Statat(dirfd int, name string) (FileInfo, error) {
-	return fs._fstatat("statat", dirfd, name, 0)
+// statFollow describes the file the symbolic link name refers to, resolving the
+// link from the root of the filesystem so that it cannot lead outside of it.
+func (fs *UnixFS) statFollow(name string) (FileInfo, error) {
+	rel, err := fs.unsafePath(name)
+	if err != nil {
+		return nil, err
+	}
+	rootfd, err := fs._openat(AT_EMPTY_PATH, fs.basePath, O_DIRECTORY|O_RDONLY, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer unix.Close(rootfd)
+
+	// The target is only ever described, never read or written. Linux has
+	// O_PATH for exactly that; darwin does not, see openPathOnly.
+	fd, err := fs.openatResolved(rootfd, rel, openPathOnly, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer unix.Close(fd)
+
+	var s fileStat
+	if err := ignoringEINTR(func() error {
+		return unix.Fstat(fd, &s.sys)
+	}); err != nil {
+		return nil, ensurePathError(err, "stat", name)
+	}
+	fillFileStatFromSys(&s, filepath.Base(rel))
+	return &s, nil
 }
 
 // Lstat returns a FileInfo describing the named file.
@@ -544,14 +586,30 @@ func (fs *UnixFS) Lstat(name string) (FileInfo, error) {
 	return fs._fstat("lstat", name, AT_SYMLINK_NOFOLLOW)
 }
 
+// Readlinkat returns the target of the symbolic link name in the directory
+// dirfd.
+func (fs *UnixFS) Readlinkat(dirfd int, name string) (string, error) {
+	for size := 256; ; size *= 2 {
+		b := make([]byte, size)
+		var n int
+		err := ignoringEINTR(func() error {
+			var err error
+			n, err = unix.Readlinkat(dirfd, name, b)
+			return err
+		})
+		if err != nil {
+			return "", ensurePathError(err, "readlinkat", name)
+		}
+		if n < size {
+			return string(b[:n]), nil
+		}
+	}
+}
+
 // Lstatat is like Lstat but allows passing an existing directory file
 // descriptor rather than needing to resolve one.
 func (fs *UnixFS) Lstatat(dirfd int, name string) (FileInfo, error) {
 	return fs._fstatat("lstatat", dirfd, name, AT_SYMLINK_NOFOLLOW)
-}
-
-func (fs *UnixFS) fstat(name string, flags int) (FileInfo, error) {
-	return fs._fstat("fstat", name, flags)
 }
 
 func (fs *UnixFS) _fstat(op string, name string, flags int) (FileInfo, error) {
@@ -561,10 +619,6 @@ func (fs *UnixFS) _fstat(op string, name string, flags int) (FileInfo, error) {
 		return nil, err
 	}
 	return fs._fstatat(op, dirfd, name, flags)
-}
-
-func (fs *UnixFS) fstatat(dirfd int, name string, flags int) (FileInfo, error) {
-	return fs._fstatat("fstatat", dirfd, name, flags)
 }
 
 func (fs *UnixFS) _fstatat(op string, dirfd int, name string, flags int) (FileInfo, error) {
@@ -669,6 +723,24 @@ func (fs *UnixFS) openat(dirfd int, name string, flag int, mode FileMode) (int, 
 	if flag&O_NOFOLLOW == 0 {
 		flag |= O_NOFOLLOW
 	}
+	return fs.openatResolved(dirfd, name, flag, mode)
+}
+
+// openatResolved is openat without O_NOFOLLOW being added, so that a symbolic
+// link as the last element of name is followed. Any symbolic link must still
+// resolve to a path beneath dirfd.
+func (fs *UnixFS) openatResolved(dirfd int, name string, flag int, mode FileMode) (int, error) {
+	// Open everything without blocking and refuse anything that is not a regular
+	// file or a directory. Paths opened with openPathOnly are never read or
+	// written.
+	//
+	// openPathOnly is O_PATH on Linux. darwin has no such flag and stands in a
+	// combination of flags for it, so the request is only recognised when every
+	// bit of it is present rather than any one of them.
+	checkType := flag&openPathOnly != openPathOnly
+	if checkType {
+		flag |= unix.O_NONBLOCK
+	}
 
 	var fd int
 	for {
@@ -688,6 +760,13 @@ func (fs *UnixFS) openat(dirfd int, name string, flag int, mode FileMode) (int, 
 		return 0, err
 	}
 
+	if checkType {
+		if err := checkOpenedType(fd, name); err != nil {
+			_ = unix.Close(fd)
+			return 0, err
+		}
+	}
+
 	// If we are using openat2, we don't need the additional security checks.
 	if fs.useOpenat2 {
 		return fd, nil
@@ -695,14 +774,27 @@ func (fs *UnixFS) openat(dirfd int, name string, flag int, mode FileMode) (int, 
 
 	// If we are not using openat2, do additional path checking. This assumes
 	// that openat2 is using `RESOLVE_BENEATH` to avoid the same security
-	// issue.
-	//
-	// O_NOFOLLOW only protects the final component, so an intermediate symlink
-	// in a multi-component path could still have escaped the sandbox. Ask the
-	// kernel where this descriptor actually landed and verify it.
+	// issue. The file is closed if the check fails, since callers only use the
+	// file descriptor when there is no error.
+	if err := fs.checkOpenedPath(fd, name); err != nil {
+		_ = unix.Close(fd)
+		return 0, err
+	}
+	return fd, nil
+}
+
+// checkOpenedPath returns an error if the file opened as fd, without the
+// protection of openat2, resolved to a path outside of the filesystem.
+//
+// O_NOFOLLOW only protects the final component, so an intermediate symlink
+// in a multi-component path could still have escaped the sandbox. Ask the
+// kernel where this descriptor actually landed and verify it. How the kernel
+// is asked is platform-specific: procfs on Linux, fcntl(F_GETPATH) on darwin.
+// See fdpath_linux.go and fdpath_darwin.go.
+func (fs *UnixFS) checkOpenedPath(fd int, name string) error {
 	finalPath, softErr, fatalErr := fs.resolveFdPath(fd)
 	if fatalErr != nil {
-		return fd, fatalErr
+		return fatalErr
 	}
 
 	// Check if the path is within our root.
@@ -711,15 +803,33 @@ func (fs *UnixFS) openat(dirfd int, name string, flag int, mode FileMode) (int, 
 		if fs.useOpenat2 {
 			op = "openat2"
 		}
-		return fd, &PathError{
+		return &PathError{
 			Op:   op,
 			Path: name,
 			Err:  ErrBadPathResolution,
 		}
 	}
 
-	// Return the file descriptor and any potential error.
-	return fd, softErr
+	// The lookup may have ended on a path that does not exist. That is only
+	// reported once the path it ended on is known to be inside of the root.
+	return softErr
+}
+
+// checkOpenedType returns an error if the file descriptor opened without
+// blocking is not a regular file or a directory, and otherwise switches it back
+// to blocking mode.
+func checkOpenedType(fd int, name string) error {
+	var st unix.Stat_t
+	if err := unix.Fstat(fd, &st); err != nil {
+		return convertErrorType(&PathError{Op: "fstat", Path: name, Err: err})
+	}
+	if t := st.Mode & unix.S_IFMT; t != unix.S_IFREG && t != unix.S_IFDIR {
+		return &PathError{Op: "openat", Path: name, Err: ErrNotRegular}
+	}
+	if err := unix.SetNonblock(fd, false); err != nil {
+		return convertErrorType(&PathError{Op: "fcntl", Path: name, Err: err})
+	}
+	return nil
 }
 
 // _openat is a wrapper around unix.Openat. This method should never be directly
@@ -733,12 +843,12 @@ func (fs *UnixFS) _openat(dirfd int, name string, flag int, mode uint32) (int, e
 	}
 	// O_LARGEFILE is set by Openat for us automatically.
 	fd, err := unix.Openat(dirfd, name, flag, mode)
-	switch {
-	case err == nil:
+	switch err {
+	case nil:
 		return fd, nil
-	case err == unix.EINTR:
+	case unix.EINTR:
 		return fd, err
-	case err == unix.EAGAIN:
+	case unix.EAGAIN:
 		return fd, err
 	default:
 		return fd, ensurePathError(err, "openat", name)

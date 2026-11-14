@@ -11,7 +11,7 @@ on:
 
 jobs:
   build-and-test:
-    name: Build and Test (${{ matrix.goos }}/${{ matrix.goarch }})
+    name: Build and Test (${{ matrix.goos }}/${{ matrix.goarch }}, go ${{ matrix.go }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -19,18 +19,23 @@ jobs:
       # not regress the platform everyone else runs on. Both must stay green.
       matrix:
         include:
-          - { os: macos-15, goos: darwin, goarch: amd64, go: "1.26.10" }
-          - { os: macos-15, goos: darwin, goarch: arm64, go: "1.26.10" }
-          - { os: ubuntu-24.04, goos: linux, goarch: amd64, go: "1.26.10" }
-          - { os: ubuntu-24.04, goos: linux, goarch: arm64, go: "1.26.10" }
+          - { os: macos-15, goos: darwin, goarch: amd64, go: "1.26.11" }
+          - { os: macos-15, goos: darwin, goarch: arm64, go: "1.26.11" }
+          - { os: ubuntu-24.04, goos: linux, goarch: amd64, go: "1.26.11" }
+          - { os: ubuntu-24.04, goos: linux, goarch: arm64, go: "1.26.11" }
+          # Releases are built with Go 1.26, the last line that runs on macOS
+          # 12. These two prove the tree is ready for the next one, on the
+          # newest macOS image, without publishing anything built with it.
+          - { os: macos-26, goos: darwin, goarch: arm64, go: "1.27.4" }
+          - { os: ubuntu-24.04, goos: linux, goarch: amd64, go: "1.27.4" }
     permissions:
       contents: read
     steps:
       - name: Code checkout
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Go
-        uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ matrix.go }}
 
@@ -80,15 +85,15 @@ jobs:
           sudo /tmp/native.test -test.run 'DedicatedAccount' -test.v
 
       - name: Upload Release Artifact
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'pull_request' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && matrix.go == '1.26.11' }}
         with:
           name: wings_${{ matrix.goos }}_${{ matrix.goarch }}
           path: dist/wings
 
       - name: Upload Debug Artifact
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'pull_request' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && matrix.go == '1.26.11' }}
         with:
           name: wings_${{ matrix.goos }}_${{ matrix.goarch }}_debug
           path: dist/wings_debug

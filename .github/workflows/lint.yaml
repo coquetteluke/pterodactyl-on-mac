@@ -1,0 +1,37 @@
+name: Lint
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  golangci-lint:
+    name: golangci-lint (${{ matrix.goos }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      # Linted once per platform so the _darwin, _linux and _unix files are all
+      # type-checked. Nothing here uses cgo, so darwin lints fine from Linux.
+      matrix:
+        goos: [linux, darwin]
+    env:
+      GOOS: ${{ matrix.goos }}
+    permissions:
+      contents: read
+    steps:
+      - name: Code checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.11"
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.11.4

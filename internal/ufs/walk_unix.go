@@ -45,6 +45,12 @@ func (fs *UnixFS) walkDir(b []byte, parentfd int, name, relative string, d DirEn
 		defer unix.Close(dirfd)
 	}
 	if err != nil {
+		// Report the error to the callback, the same as a failed read below, so
+		// that it can decide whether to continue.
+		err = walkDirFn(parentfd, name, relative, d, err)
+		if err == SkipDir && d.IsDir() {
+			err = nil
+		}
 		return err
 	}
 
@@ -202,12 +208,4 @@ func (de dirent) Open() (File, error) {
 	}
 	return de.fs.OpenFileat(de.dirfd, de.name, O_RDONLY, 0)
 	// return de.fs.OpenFile(de.path, O_RDONLY, 0)
-}
-
-// reset releases memory held by entry err and name, and resets mode type to 0.
-func (de *dirent) reset() {
-	de.name = ""
-	de.path = ""
-	de.modeType = 0
-	de.dirfd = 0
 }

@@ -34,12 +34,12 @@ func (fs *UnixFS) _openat2(dirfd int, name string, flag, mode uint64) (int, erro
 		// This is why using Openat2 over Openat is preferred if available.
 		Resolve: unix.RESOLVE_BENEATH,
 	})
-	switch {
-	case err == nil:
+	switch err {
+	case nil:
 		return fd, nil
-	case err == unix.EINTR:
+	case unix.EINTR:
 		return fd, err
-	case err == unix.EAGAIN:
+	case unix.EAGAIN:
 		return fd, err
 	default:
 		return fd, ensurePathError(err, "openat2", name)
