@@ -3,7 +3,7 @@
 Run Pterodactyl game servers natively on macOS. No virtual machine, no Docker.
 
 An **unofficial** fork of [Pterodactyl Wings](https://github.com/pterodactyl/wings),
-tracking **v1.13.3**. Not affiliated with or endorsed by the Pterodactyl project.
+tracking **v1.13.5**. Not affiliated with or endorsed by the Pterodactyl project.
 
 ## Quick start
 
@@ -172,6 +172,11 @@ curl -fsSL https://raw.githubusercontent.com/coquetteluke/pterodactyl-on-mac/mai
 
 Or just run the plain command and pick the second option when it asks.
 
+Homebrew only has prebuilt packages for Apple silicon on macOS 15 or newer. On
+an Intel Mac or an older macOS it builds PHP, MariaDB and nginx from source,
+which needs the Xcode Command Line Tools and can take hours; the installer says
+so before it starts. Running only a node is not affected.
+
 This installs PHP, MariaDB and nginx through Homebrew, downloads the Panel, sets
 up its database, creates an admin account, and installs wings alongside it. The
 Panel ends up on `http://<your-mac>.local:8088`, with the generated admin and
@@ -180,8 +185,8 @@ database passwords written to `CREDENTIALS.txt` in the Panel directory.
 Three things it deliberately does differently from the Linux install guide, all
 of which will otherwise waste your afternoon:
 
-- **PHP is pinned to 8.3.** Panel 1.15 accepts `^8.2 || ^8.3`, and Homebrew's
-  unversioned `php` is 8.4 or newer, which composer refuses outright. It has
+- **PHP is pinned to 8.3.** Panel 1.15 is tested and shipped upstream on PHP
+  8.2 and 8.3 only, and Homebrew's unversioned `php` is newer than either. It has
   to be **8.3.36 or newer**, which fixes the PHP2Shell remote code execution
   bugs (CVE-2026-109618 and CVE-2026-109619). The installer upgrades an older
   PHP and turns off session upload progress, which the Panel does not use, as
@@ -251,9 +256,10 @@ curl -fsSL https://raw.githubusercontent.com/coquetteluke/pterodactyl-on-mac/mai
 
 This stops any running servers and removes the wings binary along with whichever
 service is running it, the LaunchAgent or the LaunchDaemon. If isolation is on it
-is also undone: the firewall rules are dropped, `/etc/pf.conf` is restored, and
-your server files are handed back from the per-server accounts. It
-**leaves all of your data alone**. Server files, worlds and the Panel
+is also undone: the firewall rules are dropped and `/etc/pf.conf` is restored.
+The per-server accounts are kept, since they own your server files; turn
+isolation off first (`--turn-isolation-off`) if you want the files handed back
+to your own account. It **leaves all of your data alone**. Server files, worlds and the Panel
 database all stay, and it prints where they are so you can decide.
 
 Stopping the servers first matters: they run detached so they survive a wings
@@ -275,7 +281,7 @@ machine may be using them; the uninstaller prints the command to remove them.
 
 ### Building from source
 
-Requires Go 1.24+ and whatever runtime your servers need on the host.
+Requires Go 1.26+ and whatever runtime your servers need on the host.
 
 ```bash
 go build -o wings .
@@ -403,14 +409,16 @@ memory limit.
 Upstream Wings runs every server in its own Docker container, and a great deal
 of Pterodactyl's security model rests on that. This fork has no containers.
 
-**Out of the box there is no isolation at all.** Every server runs as the same
+**Without isolation there is no boundary at all.** The installer turns it on
+unless you pass `--no-isolate`, but a wings you installed by hand or built from
+source starts with it off. In that state every server runs as the same
 user with that user's full filesystem access, so one server can read and modify
 another's files, and can read `config.yml`, which holds the node token that
 authenticates to your Panel. Every server can also reach anything the machine
 can: your Panel, other servers, the rest of your network.
 
-Most of that can be rebuilt from what macOS does have, but **all of it is opt-in
-and off by default**. One command turns on all three
+Most of that can be rebuilt from what macOS does have, and the installer does so
+by default. If it is off, one command turns on all three
 ([isolation](#isolation)):
 
 | what it covers | how it works | |
@@ -819,8 +827,8 @@ Pterodactyl node with no VM involved.
 
 | | upstream | this fork |
 | --- | --- | --- |
-| filesystem isolation | mount namespace per server | unix accounts + kernel sandbox, opt-in |
-| network isolation | network namespace per server | pf rules keyed on uid, opt-in |
+| filesystem isolation | mount namespace per server | unix accounts + kernel sandbox, on by default in the installer |
+| network isolation | network namespace per server | pf rules keyed on uid, on by default in the installer |
 | process isolation | PID namespace per server | separate accounts, plus optional process hiding |
 | memory limit | enforced by the kernel | enforced by supervision, ~1s latency |
 | CPU limit | enforced via cgroups | enforced by supervision, opt-in |
