@@ -101,15 +101,8 @@ func TestUnauthenticatedConnectionsAreLimited(t *testing.T) {
 		t.Fatal("expected third connection from the same address to be dropped")
 	}
 
-	// Another address has its own limit, until the total limit is reached.
-	if _, ok := dial(t, addr, "127.0.0.2"); !ok {
-		t.Fatal("expected connection from another address to be accepted")
-	}
-	if _, ok := dial(t, addr, "127.0.0.3"); ok {
-		t.Fatal("expected connection to be dropped once the total limit is reached")
-	}
-
-	// Closing a pending connection frees up its slot.
+	// Closing a pending connection frees up its slot. This leaves two
+	// connections pending from the first address again.
 	_ = first.Close()
 	deadline := time.Now().Add(time.Second * 5)
 	for {
@@ -120,6 +113,16 @@ func TestUnauthenticatedConnectionsAreLimited(t *testing.T) {
 			t.Fatal("expected slot to be released when a pending connection closes")
 		}
 		time.Sleep(time.Millisecond * 50)
+	}
+
+	// Another address has its own limit, until the total limit is reached.
+	// This part comes last because it needs a second loopback address, which
+	// macOS does not have, and dial skips the rest of the test without one.
+	if _, ok := dial(t, addr, "127.0.0.2"); !ok {
+		t.Fatal("expected connection from another address to be accepted")
+	}
+	if _, ok := dial(t, addr, "127.0.0.3"); ok {
+		t.Fatal("expected connection to be dropped once the total limit is reached")
 	}
 }
 
@@ -184,6 +187,13 @@ func TestAuthenticatedConnectionsAreLimitedPerUser(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = c.Close() })
+		// Dial returns once the client has seen authentication succeed, which
+		// is before the server has counted the session. Wait for an answer to
+		// a request, which the server only gives once it has, so that the next
+		// connection cannot be counted ahead of this one and take its place.
+		if _, _, err := c.SendRequest("keepalive@openssh.com", true, nil); err != nil {
+			t.Fatal(err)
+		}
 		clients = append(clients, c)
 	}
 	if c, err := connect("user.12345678"); err == nil {

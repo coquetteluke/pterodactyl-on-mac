@@ -256,6 +256,12 @@ func TestPerUserLimitUsesAuthenticatedAccount(t *testing.T) {
 		client, err := connect("user.12345678")
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = client.Close() })
+		// Dial returns once the client has seen authentication succeed, which
+		// is before the server has counted the session. Wait for an answer to
+		// a request, which the server only gives once it has, so that the next
+		// connection cannot be counted ahead of this one and take its place.
+		_, _, err = client.SendRequest("keepalive@openssh.com", true, nil)
+		require.NoError(t, err)
 	}
 
 	third, err := connect("USER.12345678")
