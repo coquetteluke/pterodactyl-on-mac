@@ -19,7 +19,8 @@ somewhere else, a Raspberry Pi for instance, or run the Panel too. Pass `--node`
 or `--full` to answer that up front, or `--yes` to skip the questions entirely.
 
 If your Panel is on another machine, set the node's **Daemon Port to 8443**, not
-443: an unprivileged process cannot bind a port below 1024.
+443: without root, macOS only binds a port below 1024 on the wildcard address,
+so 443 stops working as soon as wings listens on one address.
 
 ## Updating
 

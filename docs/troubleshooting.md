@@ -24,8 +24,8 @@ is not running at all.
 
 Then, in Admin → Nodes → your node → Settings:
 
-- **Daemon Port: 8443.** Not 443, which an unprivileged process cannot bind, and
-  not the Panel's port.
+- **Daemon Port: 8443.** Not 443, which needs root unless wings listens on the
+  wildcard address, and not the Panel's port.
 - **SSL: off**, unless you have put a TLS terminator in front of wings
   yourself. wings ships no certificate, so with SSL on the Panel tries HTTPS
   against a plain HTTP daemon.
@@ -55,8 +55,9 @@ If `api.port` in `config.yml` disagrees with the node's Daemon Port, the Panel
 is knocking on the wrong door. The Panel pushes `api.port = daemonListen` every
 time a node is saved, which is why `ignore_panel_config_updates: true` is
 recommended. Without it, saving the node in the UI silently rewrites your
-config back to a port the daemon cannot bind, and it stops coming back after a
-restart.
+config back to the Panel's port. If that is one the daemon cannot bind, because
+something else has it or it is below 1024 and `api.host` names one address, it
+stops coming back after a restart.
 
 ### A new server exits with code 1 immediately and prints nothing
 

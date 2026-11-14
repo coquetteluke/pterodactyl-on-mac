@@ -101,8 +101,9 @@ against the published `SHA256SUMS`, installs it to `~/.local/bin/wings`, creates
 the data directories, and prints the configuration you still need to do.
 
 You then create the node in your existing Panel and paste its config here. Set
-the node's **Daemon Port to 8443**, not 443, because an unprivileged process
-cannot bind a port below 1024.
+the node's **Daemon Port to 8443**, not 443: without root, macOS only lets a
+process bind a port below 1024 on the wildcard address, so 443 stops working as
+soon as wings is told to listen on one address.
 
 ### The questions it asks
 
@@ -183,8 +184,7 @@ up its database, creates an admin account, and installs wings alongside it. The
 Panel ends up on `http://<your-mac>.local:8088`, with the generated admin and
 database passwords written to `CREDENTIALS.txt` in the Panel directory.
 
-Three things it deliberately does differently from the Linux install guide, all
-of which will otherwise waste your afternoon:
+Three things it deliberately does differently from the Linux install guide:
 
 - **PHP is pinned to 8.3.** Panel 1.15 is tested and shipped upstream on PHP
   8.2 and 8.3 only, and Homebrew's unversioned `php` is newer than either. It has
@@ -193,9 +193,8 @@ of which will otherwise waste your afternoon:
   PHP and turns off session upload progress, which the Panel does not use, as
   extra cover. If you already run the Panel, run the install command again
   and pick **update** (or pass `--update`) to get the fix.
-- **No Redis.** Homebrew's current Redis build aborts on startup over a broken
-  module path in its own shipped config. The Panel runs perfectly well on the
-  file cache and database queue, so it is simply not installed.
+- **No Redis.** The Panel does not need it. It runs perfectly well on the file
+  cache and database queue, so Redis is simply not installed.
 - **Port 8088, not 8080.** Homebrew's stock `nginx.conf` already serves its
   welcome page on 8080 and that block is parsed first, so it would win as the
   default server for the port and the Panel would silently never be reached.
@@ -327,7 +326,7 @@ system:
   root_directory: /Users/you/pterodactyl
   data: /Users/you/pterodactyl/volumes
 api:
-  port: 8443                 # an unprivileged process cannot bind 443
+  port: 8443                 # binds without root on any address; 443 does not
 ignore_panel_config_updates: true
 ```
 
@@ -360,8 +359,10 @@ because something here behaves differently from a Linux install.
 | Daemon Port | **8443** |
 | Daemon SFTP Port | 2022 |
 
-Not 443. An unprivileged process cannot bind a port below 1024, and using 443
-is what pushes people into running wings as root.
+Not 443. Without root, macOS binds a port below 1024 only on the wildcard
+address (`api.host: 0.0.0.0`, the default). Point wings at one address and 443
+fails with "permission denied", which is what pushes people into running wings
+as root. 8443 binds either way.
 
 **3. Fetch the config.** Open the node's Configuration tab, press the button to
 generate a token, and run the command it shows you:
