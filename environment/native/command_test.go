@@ -146,6 +146,43 @@ func TestNativeEnvironment_SendCommandDoesNotBlockForever(t *testing.T) {
 	})
 }
 
+// Commands queued at a server that is not reading its input give up together,
+// so a stop command is never left waiting behind them.
+func TestNativeEnvironment_QueuedCommandsShareOneTimeout(t *testing.T) {
+	previous := commandWriteTimeout
+	commandWriteTimeout = 500 * time.Millisecond
+	t.Cleanup(func() { commandWriteTimeout = previous })
+
+	e := newTestEnvironment(t, "sleep 300", stopByCommand)
+	startAndCollect(t, e)
+
+	line := strings.Repeat("x", 255)
+	var err error
+	for i := 0; i < 4096 && err == nil; i++ {
+		err = e.SendCommand(line)
+	}
+	if !errors.Is(err, errCommandWriteTimeout) {
+		t.Fatalf("expected sending to time out once the input was full, got %v", err)
+	}
+
+	// Sent at once, each in its own goroutine, as the websocket does.
+	start := time.Now()
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = e.SendCommand(line)
+		}()
+	}
+	wg.Wait()
+
+	// One timeout between them, not one each.
+	if took := time.Since(start); took > 4*commandWriteTimeout {
+		t.Fatalf("queued commands took %s to give up, expected about %s", took, commandWriteTimeout)
+	}
+}
+
 // Anything a server leaves running in the background goes when the server
 // does, as it would in a container.
 func TestNativeEnvironment_LeftoverProcessesDieWithTheServer(t *testing.T) {

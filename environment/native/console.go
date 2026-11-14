@@ -381,6 +381,11 @@ var errCommandWriteTimeout = errors.Sentinel("timed out waiting for the process 
 // second descriptor on the same FIFO can be non-blocking without the server
 // noticing, since that is a property of the open and not of the FIFO.
 func (e *Environment) writeCommand(b []byte) error {
+	// Taken before waiting for a turn, so that the wait counts against it.
+	// Commands sent to a server that is not reading would otherwise queue up
+	// and each wait out a full timeout, with a stop command stuck behind them.
+	deadline := time.Now().Add(commandWriteTimeout)
+
 	// One command at a time, so that two long ones cannot interleave.
 	e.commandMu.Lock()
 	defer e.commandMu.Unlock()
@@ -391,7 +396,6 @@ func (e *Environment) writeCommand(b []byte) error {
 	}
 	defer unix.Close(fd)
 
-	deadline := time.Now().Add(commandWriteTimeout)
 	for len(b) > 0 {
 		n, err := unix.Write(fd, b)
 		if n > 0 {
