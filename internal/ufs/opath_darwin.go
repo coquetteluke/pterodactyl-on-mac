@@ -4,25 +4,126 @@
 
 package ufs
 
-import "golang.org/x/sys/unix"
+import (
+	"path/filepath"
+	"strings"
 
-// openPathOnly stands in for Linux's O_PATH, which darwin does not have.
+	"golang.org/x/sys/unix"
+)
+
+// pathOnlyOpen reports whether flag asks for a descriptor that only identifies
+// a file. That is O_PATH, which darwin does not have, so nothing does.
+func pathOnlyOpen(int) bool {
+	return false
+}
+
+// maxLinkDepth is how many symbolic links statFollow resolves before giving
+// up, the same number the kernel allows.
+const maxLinkDepth = 32
+
+// statFollow describes the file the symbolic link name refers to, without
+// letting the link lead outside of the filesystem.
 //
-// It is used to open the target of a symbolic link purely so that it can be
-// described with fstat once the kernel has confirmed where it resolved to.
-// Without O_PATH the target really is opened, so:
+// Linux does this by opening the target with O_PATH, which reaches a file
+// without running its open routine, checking where that landed, and calling
+// fstat. Without O_PATH the only way to get a descriptor for the target is to
+// really open it, and a link can point anywhere: at a FIFO, which would make
+// wings its reader, or at a device, whose driver would be opened as whoever
+// wings runs as, all before it is known to be outside the root.
 //
-//   - O_NONBLOCK keeps the open from blocking forever when the target is a
-//     FIFO with no writer. The descriptor is never read, so it is never
-//     switched back to blocking mode.
-//   - O_EVTONLY is the closest thing XNU has to a "reference only" open: the
-//     descriptor does not keep the volume busy. It is also what lets openat
-//     tell this request apart from an ordinary read-only open.
-//
-// Two things O_PATH allows are not possible here: a link to a socket cannot be
-// described (open fails with EOPNOTSUPP), and neither can a link to a file the
-// daemon is not permitted to read.
-const openPathOnly = unix.O_RDONLY | unix.O_EVTONLY | unix.O_NONBLOCK
+// So the chain of links is followed here instead. Each step opens only the
+// directory holding the next name, which the kernel refuses unless it is a
+// directory and which is then confirmed to be inside the root, and describes
+// that name without following it. A link's target is read and resolved
+// against the directory it is in, and has to stay inside the root to be looked
+// at at all.
+func (fs *UnixFS) statFollow(name string) (FileInfo, error) {
+	rel, err := fs.unsafePath(name)
+	if err != nil {
+		return nil, err
+	}
+	rootfd, err := fs._openat(AT_EMPTY_PATH, fs.basePath, O_DIRECTORY|O_RDONLY, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer unix.Close(rootfd)
+
+	cur := rel
+	for range maxLinkDepth {
+		s, target, err := fs.describeOrReadLink(rootfd, cur)
+		if err != nil {
+			return nil, ensurePathError(err, "stat", name)
+		}
+		if s != nil {
+			fillFileStatFromSys(s, filepath.Base(rel))
+			return s, nil
+		}
+		if !fs.unsafeIsPathInsideOfBase(target) {
+			return nil, &PathError{Op: "stat", Path: name, Err: ErrBadPathResolution}
+		}
+		cur = strings.TrimPrefix(strings.TrimPrefix(target, fs.basePath), "/")
+		if cur == "" {
+			cur = "."
+		}
+	}
+	// Too many links, which the kernel reports as ELOOP and callers already
+	// treat as a path that does not resolve inside the root.
+	return nil, &PathError{Op: "stat", Path: name, Err: ErrBadPathResolution}
+}
+
+// describeOrReadLink looks at rel, a path relative to rootfd, without following
+// it. If it is not a symbolic link its description is returned. If it is, the
+// cleaned absolute path it points at is returned instead, in terms of the
+// configured base path.
+func (fs *UnixFS) describeOrReadLink(rootfd int, rel string) (*fileStat, string, error) {
+	dir, leaf := filepath.Split(rel)
+	dirfd := rootfd
+	if dir = strings.TrimSuffix(dir, "/"); dir != "" {
+		// O_DIRECTORY is checked before anything is opened, and the result is
+		// confirmed to be inside the root, links in the path included.
+		fd, err := fs.openatResolved(rootfd, dir, O_DIRECTORY|O_RDONLY, 0)
+		if err != nil {
+			return nil, "", err
+		}
+		defer unix.Close(fd)
+		dirfd = fd
+	}
+
+	var s fileStat
+	if err := ignoringEINTR(func() error {
+		return unix.Fstatat(dirfd, leaf, &s.sys, AT_SYMLINK_NOFOLLOW)
+	}); err != nil {
+		return nil, "", err
+	}
+	if s.sys.Mode&unix.S_IFMT != unix.S_IFLNK {
+		return &s, "", nil
+	}
+
+	target, err := fs.Readlinkat(dirfd, leaf)
+	if err != nil {
+		return nil, "", err
+	}
+	if !filepath.IsAbs(target) {
+		// Relative to the directory the link is in, as the kernel has it.
+		parent, _, err := fs.resolveFdPath(dirfd)
+		if err != nil {
+			return nil, "", err
+		}
+		target = filepath.Join(parent, target)
+	}
+	target = filepath.Clean(target)
+
+	// A link may spell out the real path of a root that sits behind a
+	// firmlink, /private/var for /var; that is still inside the root.
+	if fs.realBasePath != "" && fs.realBasePath != fs.basePath {
+		if target == fs.realBasePath {
+			target = fs.basePath
+		} else if strings.HasPrefix(target, fs.realBasePath+"/") {
+			target = fs.basePath + strings.TrimPrefix(target, fs.realBasePath)
+		}
+	}
+	return nil, target, nil
+}
 
 // fchmodNoFollow changes the mode of name without following it if it is a
 // symbolic link.

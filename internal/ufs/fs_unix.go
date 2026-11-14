@@ -546,35 +546,11 @@ func (fs *UnixFS) Stat(name string) (FileInfo, error) {
 }
 
 // statFollow describes the file the symbolic link name refers to, resolving the
-// link from the root of the filesystem so that it cannot lead outside of it.
-func (fs *UnixFS) statFollow(name string) (FileInfo, error) {
-	rel, err := fs.unsafePath(name)
-	if err != nil {
-		return nil, err
-	}
-	rootfd, err := fs._openat(AT_EMPTY_PATH, fs.basePath, O_DIRECTORY|O_RDONLY, 0)
-	if err != nil {
-		return nil, err
-	}
-	defer unix.Close(rootfd)
-
-	// The target is only ever described, never read or written. Linux has
-	// O_PATH for exactly that; darwin does not, see openPathOnly.
-	fd, err := fs.openatResolved(rootfd, rel, openPathOnly, 0)
-	if err != nil {
-		return nil, err
-	}
-	defer unix.Close(fd)
-
-	var s fileStat
-	if err := ignoringEINTR(func() error {
-		return unix.Fstat(fd, &s.sys)
-	}); err != nil {
-		return nil, ensurePathError(err, "stat", name)
-	}
-	fillFileStatFromSys(&s, filepath.Base(rel))
-	return &s, nil
-}
+// link so that it cannot lead outside of the filesystem. It is defined per-GOOS:
+// Linux lets the kernel resolve the link and describes what it found through an
+// O_PATH descriptor (opath_linux.go). darwin has no O_PATH, so opening the
+// target would mean really opening it, wherever it is; it resolves the link
+// itself instead (opath_darwin.go).
 
 // Lstat returns a FileInfo describing the named file.
 //
@@ -731,13 +707,9 @@ func (fs *UnixFS) openat(dirfd int, name string, flag int, mode FileMode) (int, 
 // resolve to a path beneath dirfd.
 func (fs *UnixFS) openatResolved(dirfd int, name string, flag int, mode FileMode) (int, error) {
 	// Open everything without blocking and refuse anything that is not a regular
-	// file or a directory. Paths opened with openPathOnly are never read or
-	// written.
-	//
-	// openPathOnly is O_PATH on Linux. darwin has no such flag and stands in a
-	// combination of flags for it, so the request is only recognised when every
-	// bit of it is present rather than any one of them.
-	checkType := flag&openPathOnly != openPathOnly
+	// file or a directory. Paths opened with O_PATH are never read or written,
+	// and only Linux has it.
+	checkType := !pathOnlyOpen(flag)
 	if checkType {
 		flag |= unix.O_NONBLOCK
 	}

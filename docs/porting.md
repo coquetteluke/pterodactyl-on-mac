@@ -23,10 +23,12 @@ Linux-only syscalls:
 - **There is no `O_PATH` either.** Since v1.13.5 Wings describes the target of a
   symlink by opening it with `O_PATH`, checking where it landed, and calling
   `fstat`, so that `Stat` cannot be used to look at a file outside the server
-  root. darwin has to open the target for real, so `openPathOnly` there is
-  `O_RDONLY|O_EVTONLY|O_NONBLOCK`: non-blocking so a FIFO with no writer cannot
-  hang the call, and never read from. Two things `O_PATH` allows are lost: a
-  link to a socket, or to a file wings may not read, cannot be described.
+  root. `O_PATH` reaches a file without running its open routine. Any open
+  darwin offers does run it, on whatever the link points at: a FIFO gains a
+  reader, a device has its driver opened, and only then is it known to be
+  outside the root. So darwin follows the chain of links itself, opening only
+  the directory that holds each name and describing the name with
+  `fstatat(AT_SYMLINK_NOFOLLOW)`.
 - The chmod fallback for kernels without `fchmodat2` goes through an `O_PATH`
   descriptor and procfs on Linux. darwin's `fchmodat` has always accepted
   `AT_SYMLINK_NOFOLLOW`, so its `fchmodNoFollow` needs neither.

@@ -6,15 +6,46 @@
 package ufs
 
 import (
+	"path/filepath"
 	"strconv"
 
 	"golang.org/x/sys/unix"
 )
 
-// openPathOnly is the open flag used to obtain a descriptor that only
-// identifies a file so that it can be described, and is never read from or
-// written to.
-const openPathOnly = unix.O_PATH
+// pathOnlyOpen reports whether flag asks for a descriptor that only identifies
+// a file so that it can be described, and is never read from or written to.
+func pathOnlyOpen(flag int) bool {
+	return flag&unix.O_PATH != 0
+}
+
+// statFollow describes the file the symbolic link name refers to, resolving the
+// link from the root of the filesystem so that it cannot lead outside of it.
+func (fs *UnixFS) statFollow(name string) (FileInfo, error) {
+	rel, err := fs.unsafePath(name)
+	if err != nil {
+		return nil, err
+	}
+	rootfd, err := fs._openat(AT_EMPTY_PATH, fs.basePath, O_DIRECTORY|O_RDONLY, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer unix.Close(rootfd)
+
+	fd, err := fs.openatResolved(rootfd, rel, unix.O_PATH, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer unix.Close(fd)
+
+	var s fileStat
+	if err := ignoringEINTR(func() error {
+		return unix.Fstat(fd, &s.sys)
+	}); err != nil {
+		return nil, ensurePathError(err, "stat", name)
+	}
+	fillFileStatFromSys(&s, filepath.Base(rel))
+	return &s, nil
+}
 
 // fchmodNoFollow changes the mode of name without following it if it is a
 // symbolic link, without needing fchmodat2.
