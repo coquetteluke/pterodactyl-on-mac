@@ -236,6 +236,65 @@ func TestNativeEnvironment_StopWaitsForWhatTheShellLeftRunning(t *testing.T) {
 	}
 }
 
+// A second request to stop, arriving while the first is still being waited
+// on, waits with it. Suspension, a reinstall, a backup restore and a transfer
+// all ask without holding the lock the power buttons hold.
+func TestNativeEnvironment_SecondStopDoesNotKillWhatIsStillSaving(t *testing.T) {
+	root := t.TempDir()
+	startup := `sh -c 'trap "sleep 2; echo saved > saved.txt; exit 0" TERM; echo ready; while :; do sleep 0.1; done' & wait`
+	e := newTestEnvironmentAt(t, root, startup, remote.ProcessStopConfiguration{
+		Type:  remote.ProcessStopSignal,
+		Value: "SIGTERM",
+	})
+	hasLine, _ := startAndCollect(t, e)
+	waitFor(t, "the server to be ready", hasLine("ready"))
+
+	if err := e.Stop(context.Background()); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	// Long enough for the shell and the supervisor to have gone, and not long
+	// enough for the save to have finished.
+	time.Sleep(time.Second)
+
+	if err := e.WaitForStop(context.Background(), 30*time.Second, true); err != nil {
+		t.Fatalf("wait for stop: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "servers", "test", "saved.txt")); err != nil {
+		t.Fatalf("the second stop killed the server before it finished saving: %v", err)
+	}
+	if st := e.State(); st != environment.ProcessOfflineState {
+		t.Fatalf("expected the server to be offline once everything had exited, got %s", st)
+	}
+}
+
+// A server stopped by its stop command is not held in the stopping state by
+// something it started beside itself, which nobody has told to stop.
+func TestNativeEnvironment_CommandStopDoesNotWaitOnAHelperForLong(t *testing.T) {
+	previous := leftoverCommandGrace
+	leftoverCommandGrace = time.Second
+	t.Cleanup(func() { leftoverCommandGrace = previous })
+
+	e := newTestEnvironment(t, `sleep 300 & echo "child:$!"; `+echoLoop, stopByCommand)
+	_, firstLine := startAndCollect(t, e)
+	waitFor(t, "helper pid announcement", func() bool { return firstLine() != "" })
+	var helperPid int
+	if _, err := fmtSscan(firstLine(), &helperPid); err != nil {
+		t.Fatalf("could not parse helper pid from %q: %v", firstLine(), err)
+	}
+
+	start := time.Now()
+	if err := e.WaitForStop(context.Background(), time.Minute, false); err != nil {
+		t.Fatalf("wait for stop: %v", err)
+	}
+	if took := time.Since(start); took > 20*time.Second {
+		t.Fatalf("the stop took %s, held up by a helper the server left running", took)
+	}
+	waitFor(t, "the helper to be killed", func() bool { return !processIsAlive(helperPid) })
+	if st := e.State(); st != environment.ProcessOfflineState {
+		t.Fatalf("expected the server to be offline, got %s", st)
+	}
+}
+
 // The wait above ends when the stop is abandoned for a kill.
 func TestNativeEnvironment_KillEndsTheWaitForWhatTheShellLeftRunning(t *testing.T) {
 	// Ignores the stop signal entirely, so it would be waited on for good.

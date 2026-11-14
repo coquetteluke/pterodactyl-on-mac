@@ -352,6 +352,10 @@ const leftoverPollInterval = 100 * time.Millisecond
 // nothing is waiting on.
 var leftoverStopGrace = 15 * time.Minute
 
+// leftoverCommandGrace is how long a group is waited on when the server is
+// stopped by a command instead of a signal. See sweepGroup.
+var leftoverCommandGrace = 30 * time.Second
+
 // sweepGroup deals with whatever is left in a server's process group once the
 // supervisor at its head has exited.
 //
@@ -369,10 +373,26 @@ var leftoverStopGrace = 15 * time.Minute
 // timeout of whoever is waiting on the stop, both of which move the state on
 // from stopping.
 //
+// That is for a stop by signal. A stop command is read by the server itself,
+// and the shell around it then lasts exactly as long as the server does. What
+// is still there once the supervisor has gone is something the server started
+// beside itself, a tunnel or a log tailer, which nobody has told to stop and
+// which would hold the server in the stopping state until it was killed. That
+// is given long enough for a server that hands its shutdown to a child and
+// exits first, and no longer.
+//
 // The group id cannot be reused while a member is alive, and once none is the
 // signal fails with ESRCH, so this cannot reach anything else.
 func (e *Environment) sweepGroup(pid int) {
-	deadline := time.Now().Add(leftoverStopGrace)
+	e.mu.RLock()
+	stop := e.meta.Stop
+	e.mu.RUnlock()
+
+	grace := leftoverStopGrace
+	if stop.Type == remote.ProcessStopCommand {
+		grace = leftoverCommandGrace
+	}
+	deadline := time.Now().Add(grace)
 	for e.st.Load() == environment.ProcessStoppingState && groupHasMembers(pid) && time.Now().Before(deadline) {
 		time.Sleep(leftoverPollInterval)
 	}
@@ -468,7 +488,17 @@ func (e *Environment) Stop(ctx context.Context) error {
 	}
 
 	if !processIsAlive(e.currentPid()) {
-		e.SetState(environment.ProcessOfflineState)
+		// The supervisor is gone, but its exit may still be being dealt with:
+		// while the server is stopping, whatever is left in its group is
+		// waited for, and the server is not offline until that is done. Saying
+		// so here would end that wait and have what is left killed, which a
+		// second request to stop must not do to a server that is saving.
+		e.mu.RLock()
+		exiting := e.wait != nil
+		e.mu.RUnlock()
+		if !exiting {
+			e.SetState(environment.ProcessOfflineState)
+		}
 		return nil
 	}
 
