@@ -20,6 +20,16 @@ Linux-only syscalls:
   pre-5.6-kernel `openat` path that validates in userspace. `NewUnixFS` clamps
   the request so a caller asking for openat2 cannot get a filesystem where every
   operation returns `ENOSYS`.
+- **There is no `O_PATH` either.** Since v1.13.5 Wings describes the target of a
+  symlink by opening it with `O_PATH`, checking where it landed, and calling
+  `fstat`, so that `Stat` cannot be used to look at a file outside the server
+  root. darwin has to open the target for real, so `openPathOnly` there is
+  `O_RDONLY|O_EVTONLY|O_NONBLOCK`: non-blocking so a FIFO with no writer cannot
+  hang the call, and never read from. Two things `O_PATH` allows are lost: a
+  link to a socket, or to a file wings may not read, cannot be described.
+- The chmod fallback for kernels without `fchmodat2` goes through an `O_PATH`
+  descriptor and procfs on Linux. darwin's `fchmodat` has always accepted
+  `AT_SYMLINK_NOFOLLOW`, so its `fchmodNoFollow` needs neither.
 - Don't reach for `x/sys/unix.Getdirentries` on darwin. It emulates `getdents`
   by re-opening the directory and skipping N entries per call, which is O(n²).
   Use `fdopendir` (via `os.File.ReadDir`).

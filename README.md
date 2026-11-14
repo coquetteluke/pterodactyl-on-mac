@@ -304,6 +304,12 @@ match, because the Panel emits Linux paths for every node regardless of what it
 runs. That is the whole of the setup; the rest of this section is what those
 settings mean, and what to change if you copy the YAML by hand instead.
 
+Running it again on a node that is already configured keeps what is in
+`config.yml` and only refreshes what the Panel owns: the token, the API and SFTP
+ports, the TLS settings, the upload limit and the list of allowed mounts. It used to rebuild the file from
+scratch. Directories still under `/var` or `/tmp` are moved to your home
+directory as before.
+
 Three settings matter for this fork:
 
 ```yaml

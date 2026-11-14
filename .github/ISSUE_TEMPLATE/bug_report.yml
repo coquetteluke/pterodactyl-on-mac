@@ -28,7 +28,7 @@ body:
     attributes:
       label: Which Mac
       options:
-        - Apple silicon (M1/M2/M3/M4)
+        - Apple silicon
         - Intel
     validations:
       required: true
