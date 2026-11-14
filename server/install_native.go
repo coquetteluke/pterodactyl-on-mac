@@ -85,6 +85,16 @@ func (ip *InstallationProcess) executeNative() error {
 		}
 	}
 
+	// The firewall policy is otherwise loaded when wings boots and when a
+	// server starts. One that has only just been created has done neither, so
+	// its install script would run before any rule named its account. This
+	// does nothing unless network isolation is on.
+	if ip.Server.applyNetworkIsolation != nil {
+		if err := ip.Server.applyNetworkIsolation(); err != nil {
+			return errors.WithMessage(err, "install: unable to apply network isolation")
+		}
+	}
+
 	interpreter := resolveInterpreter(ip.Script.Entrypoint)
 	ip.Server.Log().
 		WithField("install_script", scriptPath).

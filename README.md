@@ -839,6 +839,7 @@ Pterodactyl node with no VM involved.
 | memory limit | enforced by the kernel | enforced by supervision, ~1s latency |
 | CPU limit | enforced via cgroups | enforced by supervision, opt-in |
 | egg install | runs in the installer image | runs on the host (see below) |
+| mounts | bind-mounted into the container | not applied; a mount set in the Panel does nothing here |
 | server user | dedicated `pterodactyl` user | the user running Wings, or an account per server when isolation is on |
 
 Egg install scripts hardcode `/mnt/server` and `/mnt/install`. There is nothing
@@ -846,6 +847,10 @@ to mount those onto, and macOS's sealed root filesystem means `/mnt` cannot even
 be created, so the script text is rewritten to point at the real directories.
 This works for essentially every real egg, but a script that assembles a path at
 runtime (`cd /mnt/${dir}`) will not be caught and will fail.
+
+With isolation on, an install script runs under the server's own account and
+behind its firewall rules, like the server does. It is not wrapped in the
+kernel sandbox, which only the server process gets.
 
 They also assume the installer image's toolbox. `curl`, `tar` and `unzip` are on
 macOS already; `jq` and `wget` are not, and plenty of eggs need them, so the
