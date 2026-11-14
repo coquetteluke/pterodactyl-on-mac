@@ -16,7 +16,6 @@ import (
 
 	"github.com/pterodactyl/wings/config"
 	"github.com/pterodactyl/wings/environment"
-	"github.com/pterodactyl/wings/internal/serveruser"
 	"github.com/pterodactyl/wings/remote"
 
 	"golang.org/x/sys/unix"
@@ -324,40 +323,9 @@ func TestNativeEnvironment_StalePidIsNotTrusted(t *testing.T) {
 // Verifying that needs root, so this is skipped for an ordinary `go test` and
 // is the reason the suite is also run under sudo in CI.
 func TestNativeEnvironment_RunsUnderDedicatedAccount(t *testing.T) {
-	if os.Geteuid() != 0 {
-		t.Skip("changing a process's user requires root")
-	}
-
-	// "nobody" stands in for a provisioned per-server account so the test does
-	// not have to create and tear down a real one.
-	const nobodyUID = 4294967294 // (uid_t)-2
-
-	// t.TempDir() is 0700 and root-owned, which the dropped-privilege process
-	// cannot even traverse into, so use a path it can reach.
-	root, err := os.MkdirTemp("/private/tmp", "ptero-iso")
-	if err != nil {
-		t.Fatalf("temp root: %v", err)
-	}
-	defer os.RemoveAll(root)
-
-	e := newTestEnvironmentAt(t, root, `id -u > uid.txt; cat /private/tmp/ptero-secret-probe > stolen.txt 2>/dev/null; cat ../neighbour/world.dat > peeked.txt 2>/dev/null; while :; do sleep 1; done`,
+	e, dir := newAccountEnvironment(t, `id -u > uid.txt; cat /private/tmp/ptero-secret-probe > stolen.txt 2>/dev/null; cat ../neighbour/world.dat > peeked.txt 2>/dev/null; while :; do sleep 1; done`,
 		remote.ProcessStopConfiguration{Type: remote.ProcessStopSignal, Value: "SIGKILL"})
-	e.meta.Account = &serveruser.Account{Username: "nobody", UID: nobodyUID, GID: nobodyUID}
-
-	dir, err := e.workingDir()
-	if err != nil {
-		t.Fatalf("working dir: %v", err)
-	}
-	for _, p := range []string{root, filepath.Dir(dir)} {
-		if err := os.Chmod(p, 0o755); err != nil {
-			t.Fatalf("chmod %s: %v", p, err)
-		}
-	}
-	// The account has to be able to write in its own data directory, which is
-	// what the filesystem layer's chown does in production.
-	if err := os.Chown(dir, nobodyUID, nobodyUID); err != nil {
-		t.Fatalf("chown server dir: %v", err)
-	}
+	root := config.Get().System.RootDirectory
 
 	// A root-owned secret standing in for wings' own config.yml, which holds
 	// the node token.
@@ -403,8 +371,8 @@ func TestNativeEnvironment_RunsUnderDedicatedAccount(t *testing.T) {
 	})
 
 	b, _ := os.ReadFile(uidFile)
-	if got := strings.TrimSpace(string(b)); got != "4294967294" {
-		t.Fatalf("server ran as uid %q, expected it to drop to nobody", got)
+	if got := strings.TrimSpace(string(b)); got != strconv.Itoa(e.meta.Account.UID) {
+		t.Fatalf("server ran as uid %q, expected it to drop to its account, %d", got, e.meta.Account.UID)
 	}
 
 	// The root-owned secret must not have been readable.

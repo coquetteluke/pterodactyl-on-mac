@@ -432,6 +432,31 @@ another's files, and can read `config.yml`, which holds the node token that
 authenticates to your Panel. Every server can also reach anything the machine
 can: your Panel, other servers, the rest of your network.
 
+**Without per-server accounts a server can also put processes out of wings'
+reach.** Wings follows a server by the process group of its console supervisor,
+and a process can leave a group whenever it likes. One call to `setsid` does it:
+it is what Node's `spawn({detached: true})` does, what `tmux` and `screen` do,
+and what any program does to put itself in the background. With every server
+sharing one uid there is nothing left to say whose such a process is, so wings
+does not go looking for it. That process:
+
+- is not stopped when the server is stopped, killed by the kill button, or
+  stopped when the server is suspended;
+- survives the server being deleted;
+- is not counted against the server's memory or CPU limit, and is not throttled
+  or killed for them;
+- keeps running under a server the Panel shows as offline, until you kill it
+  yourself or the Mac restarts.
+
+The same goes for a server that exits while wings is not running. What it left
+in the background is still there when wings comes back, and wings can only say
+so in its log.
+
+[Per-server accounts](#per-server-accounts) close both. Everything running as a
+server's account is that server's, whichever group it has moved to, so it is
+counted, throttled and killed with the rest
+([details](#processes-that-leave-the-server)).
+
 Most of that can be rebuilt from what macOS does have, and the installer does so
 by default. If it is off, one command turns on all three
 ([isolation](#isolation)):
@@ -441,6 +466,7 @@ by default. If it is off, one command turns on all three
 | Filesystem | an account per server, plus the kernel sandbox | [details](#per-server-accounts) |
 | Network | pf rules matched on each server's uid | [details](#network-isolation) |
 | Processes | separate accounts refuse cross-server signals; the sandbox can hide other processes entirely | [details](#process-isolation) |
+| Processes that detach | everything running as a server's account is counted and killed with it, whichever process group it is in | [details](#processes-that-leave-the-server) |
 | Process count | `RLIMIT_NPROC`, enforced by the kernel, so a fork bomb hits its own ceiling | [details](#process-isolation) |
 | Memory and CPU | supervision, not kernel quotas | [details](#resource-limits) |
 
@@ -500,6 +526,11 @@ With this on, Wings provisions a hidden account per server (`ptero-<uuid8>`, no
 shell, no home, uid allocated from 700-999), chowns that server's data directory
 to it, and drops to that account when spawning the process. A server can then no
 longer read another server's files, or `config.yml` with your node token.
+
+The account is also how Wings knows what belongs to a server. Everything running
+as it is counted towards the server's limits and killed with it, including
+[a process that has detached itself](#processes-that-leave-the-server) and would
+otherwise be out of reach.
 
 It requires **Wings to run as root**, since only root may change a process's
 user, so it needs a LaunchDaemon rather than a LaunchAgent. Servers themselves
@@ -621,6 +652,39 @@ without per-server accounts the limit would be shared between every server plus
 Wings itself, and the first server to start would set a budget for the whole
 machine. With no dedicated uid it is skipped rather than applied wrongly.
 
+### Processes that leave the server
+
+A container holds on to everything started inside it. Here a server is followed
+by its process group, which a process leaves with one call to `setsid`, and
+then nothing sent to the group reaches it.
+
+With [per-server accounts](#per-server-accounts) wings goes by the account as
+well. A process cannot change its own uid, so whatever is running as a server's
+account is that server's:
+
+- **It is counted.** Its memory and CPU are in the server's graphs and count
+  towards its limits. A server over its CPU limit has these processes stopped
+  and continued along with the rest.
+- **It is killed with the server.** When the server's main process exits,
+  everything else running as the account is killed, the way a container's other
+  processes go when its main one does. The kill button and deleting the server
+  do the same.
+- **It is not asked to stop.** The stop signal goes to the process group and the
+  stop command to the server's console, exactly as they go to a container's main
+  process. A process outside the group gets neither, and is killed once the
+  server has exited. If your server's real work happens in a process that has
+  detached itself, it will not get the chance to save; run it in the foreground
+  instead.
+- **Nothing is left over from last time.** If the server exited while wings was
+  not running, what it left behind is killed when wings next starts. A server is
+  also never started beside anything already running as its account, which
+  covers whatever an install script put in the background.
+
+Without per-server accounts none of this happens, because it cannot be done
+safely: every server shares one uid with wings and with whatever else that user
+is running. See
+[what isolation does and does not cover](#what-isolation-does-and-does-not-cover).
+
 ## Network isolation
 
 Per-server accounts stop a server reading another server's *files*. They do
@@ -715,6 +779,11 @@ Wings already samples every server's resident memory once a second for the
 Panel's graphs. When a server stays above its limit for five consecutive
 samples it is killed and reported to the Panel as an out-of-memory kill, which
 is the same thing the Panel shows when a cgroup kills a container.
+
+What is added up is the server's process group and, with per-server accounts,
+everything else running as its account. Without them a process that has
+[left the group](#processes-that-leave-the-server) is not counted, here or
+against the CPU limit below.
 
 The threshold is the Panel's memory limit plus the same overhead allowance
 Docker applies, so both environments kill at the same number. The five-sample
@@ -828,7 +897,9 @@ Practical consequences:
 
 - The supervisor is the process group leader, so it is the pid recorded in the
   runtime directory and the one signals are addressed to. The server sits in the
-  same group and gets them too.
+  same group and gets them too. A process that leaves the group does not; what
+  happens to it depends on
+  [whether the server has its own account](#processes-that-leave-the-server).
 - It costs about 15 MB of resident memory, and that shows up in the server's
   memory graph along with the server's own.
 - If a terminal cannot be allocated, the server still starts. It falls back to
