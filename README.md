@@ -451,14 +451,24 @@ reasons this is not safe to rent out, and none of them is going to be fixed:
   what you name. It does not confine a server to a private view of the disk the
   way a mount namespace does, so a server can still read world-readable files
   elsewhere on the machine.
+- **Hard links are stopped by the sandbox, not by the accounts.** macOS lets a
+  process give any file on the same volume a second name in a directory it can
+  write to, without owning the file or being able to read it. Wings runs as root
+  once isolation is on, and a name in a server's directory is a file it would
+  read out through the Panel, or hand to the server on its next start. The
+  sandbox profile refuses the link. Wings also refuses to open, chown or chmod a
+  file that has other names and is not the server's, but that is a check on a
+  link that is sitting still: a server that makes and removes the link at the
+  right moment can get past it. So per-server accounts without the sandbox do
+  not keep a hostile server out of the rest of the machine.
 - **No disk quotas.** APFS does not support them at all, so a server can fill
   the disk and take the machine down with it. Neither does upstream enforce a
   quota at write time, but on Linux you can at least put servers on a quota'd
   filesystem. Here you cannot.
 
 So the shape of it: **the isolation boundaries are real, and the resource
-boundaries are not.** A hostile server can be kept out of your files, off your
-network and away from your other servers. It cannot reliably be stopped from
+boundaries are not.** With all three switched on, a hostile server can be kept
+out of your files, off your network and away from your other servers. It cannot reliably be stopped from
 degrading or halting the machine everything runs on.
 
 So: **do not rent servers on this to strangers.** If you are running a homelab
@@ -499,6 +509,9 @@ Two things worth knowing:
   [sandbox](#filesystem-sandbox) and network rules, and read the list of what is
   still missing at the top of this file before trusting it with anyone else's
   workload.
+- **Turn the sandbox on with it.** Wings is root in this mode, and the sandbox
+  is what stops a server planting a hard link to a file elsewhere on the disk
+  for wings to act on. The installer turns both on together.
 - Existing servers are chowned on their next boot, so their files stop being
   readable by the account you normally log in as. Use SFTP or the Panel's file
   manager rather than editing them directly over ssh.

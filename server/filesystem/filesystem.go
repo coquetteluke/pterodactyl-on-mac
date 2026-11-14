@@ -69,6 +69,13 @@ func New(root string, size int64, denylist []string, owner Owner) (*Filesystem, 
 	if err != nil {
 		return nil, err
 	}
+	// Wings is root and the server is not, and the server is a host process:
+	// it can give a file from anywhere on the volume a second name in its own
+	// directory, and wings would then read it, write to it or chown it on the
+	// server's behalf. See ufs.GuardForeignLinks.
+	if guardForeignLinks && os.Geteuid() == 0 && owner.UID != 0 {
+		unixFS.GuardForeignLinks(owner.UID)
+	}
 	quota := ufs.NewQuota(unixFS, size)
 
 	return &Filesystem{
@@ -86,6 +93,11 @@ func New(root string, size int64, denylist []string, owner Owner) (*Filesystem, 
 // Both sides are lower-cased so that a different spelling cannot reach a
 // protected file. On a case-sensitive volume this only makes the list stricter.
 var foldPathCase = runtime.GOOS == "darwin"
+
+// A server on darwin is a host process, and darwin lets any process hard-link
+// a file it neither owns nor can read. A container can only link within its
+// own volume, so Linux is left as upstream has it.
+var guardForeignLinks = runtime.GOOS == "darwin"
 
 func foldDenylistCase(patterns []string) []string {
 	if !foldPathCase {
@@ -379,6 +391,10 @@ func (fs *Filesystem) Chown(p string) error {
 
 	// Start by just chowning the initial path that we received.
 	if err := fs.unixFS.Lchownat(dirfd, name, uid, gid); err != nil {
+		if errors.Is(err, ufs.ErrForeignLink) {
+			log.WithField("path", p).Warn("server/filesystem: chown: left a file that has other hard links and belongs to someone else as it is")
+			return nil
+		}
 		return errors.Wrap(err, "server/filesystem: chown: failed to chown path")
 	}
 
@@ -393,16 +409,31 @@ func (fs *Filesystem) Chown(p string) error {
 	// need to check if every individual path it touches is safe as the code
 	// doesn't traverse symlinks, is immune to symlink timing attacks, and
 	// gives us a dirfd and file name to make a direct syscall with.
-	if err := fs.unixFS.WalkDirat(dirfd, name, func(dirfd int, name, _ string, info ufs.DirEntry, err error) error {
+	var foreign int
+	var firstForeign string
+	if err := fs.unixFS.WalkDirat(dirfd, name, func(dirfd int, name, relative string, info ufs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if err := fs.unixFS.Lchownat(dirfd, name, uid, gid); err != nil {
+			// Not handed over, and not a reason to refuse to start: the file
+			// is as usable by the server as it was when the server linked it.
+			if errors.Is(err, ufs.ErrForeignLink) {
+				if foreign == 0 {
+					firstForeign = relative
+				}
+				foreign++
+				return nil
+			}
 			return err
 		}
 		return nil
 	}); err != nil {
 		return fmt.Errorf("server/filesystem: chown: failed to chown during walk function: %w", err)
+	}
+	if foreign > 0 {
+		log.WithField("path", p).WithField("count", foreign).WithField("first", firstForeign).
+			Warn("server/filesystem: chown: left files that have other hard links and belong to someone else as they are")
 	}
 	return nil
 }
@@ -600,14 +631,18 @@ func (fs *Filesystem) ListDirectory(p string) ([]Stat, error) {
 				Open() (ufs.File, error)
 			})
 			f, err := eO.Open()
-			if err != nil {
+			switch {
+			case errors.Is(err, ufs.ErrForeignLink):
+				// Listed, so it can be seen and deleted, but not read.
+			case err != nil:
 				return Stat{}, err
+			default:
+				m, err = mimetype.DetectReader(f)
+				if err != nil {
+					log.Error(err.Error())
+				}
+				_ = f.Close()
 			}
-			m, err = mimetype.DetectReader(f)
-			if err != nil {
-				log.Error(err.Error())
-			}
-			_ = f.Close()
 		}
 
 		st := Stat{FileInfo: info, Mimetype: d}

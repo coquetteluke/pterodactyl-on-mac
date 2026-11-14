@@ -25,6 +25,10 @@ var (
 	// ErrNotRegular is an error for when an operation that operates only on
 	// regular files is passed something other than a regular file.
 	ErrNotRegular = errors.New("not a regular file")
+	// ErrForeignLink is an error for when a file has other names (hard links)
+	// and does not belong to the account the filesystem serves, so it may be
+	// a file from outside of the filesystem. See GuardForeignLinks.
+	ErrForeignLink = errors.New("file has other hard links and belongs to someone else")
 
 	// ErrClosed is an error for when an entry was accessed after being closed.
 	ErrClosed = iofs.ErrClosed

@@ -213,6 +213,44 @@ func TestProfileIsEnforcedByTheKernel(t *testing.T) {
 	if err := confined("/bin/sh", "-c", "cat "+secret); err == nil {
 		t.Error("a child process escaped the sandbox and read the node token")
 	}
+
+	// A hard link needs no permission on the file it names, and a second name
+	// inside the server's directory is one every rule above allows. All of
+	// these are on one volume, so nothing but the profile refuses them.
+	outside := filepath.Join(t.TempDir(), "host-file")
+	if err := os.WriteFile(outside, []byte("not the server's\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	for name, target := range map[string]string{"a file elsewhere on the machine": outside, "wings' config.yml": secret, "another server's file": siblingFile} {
+		planted := filepath.Join(serverDir, "planted")
+		if err := confined("/bin/ln", target, planted); err == nil {
+			t.Errorf("server hard-linked %s into its own directory", name)
+		}
+		_ = os.Remove(planted)
+	}
+	if err := confined("/bin/ln", own, filepath.Join(serverDir, "second-name")); err != nil {
+		t.Errorf("server should be able to hard-link files inside its own directory: %v", err)
+	}
+}
+
+// The link rules have to sit either side of everything else: the denial before
+// the directory rules and the allowance after them.
+func TestGenerateConfinesHardLinks(t *testing.T) {
+	got, err := Generate(Profile{ServerDir: "/srv/p/volumes/abc", WingsRoot: "/srv/p"})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	deny := strings.Index(got, "(deny file-link)")
+	allow := strings.Index(got, `(allow file-link (subpath "/srv/p/volumes/abc"))`)
+	if deny == -1 || allow == -1 {
+		t.Fatalf("expected hard links to be denied and then allowed inside the server directory:\n%s", got)
+	}
+	if allow < deny {
+		t.Errorf("the allowance must come after the denial or it has no effect:\n%s", got)
+	}
+	if strings.Count(got, "(allow file-link") != 1 {
+		t.Errorf("hard links must be allowed in the server directory and nowhere else:\n%s", got)
+	}
 }
 
 func TestHideProcessesIsOptIn(t *testing.T) {

@@ -35,6 +35,10 @@ type UnixFS struct {
 	// useOpenat2 controls whether the `openat2` syscall is used instead of the
 	// older `openat` syscall.
 	useOpenat2 bool
+
+	// guardLinks and linkOwner are set by GuardForeignLinks.
+	guardLinks bool
+	linkOwner  uint32
 }
 
 // NewUnixFS creates a new sandboxed unix filesystem. BasePath is used as the
@@ -101,6 +105,9 @@ func (fs *UnixFS) Chmodat(dirfd int, name string, mode FileMode) error {
 }
 
 func (fs *UnixFS) fchmodat(op string, dirfd int, name string, mode FileMode) error {
+	if err := fs.checkNamedLink(dirfd, name, AT_SYMLINK_NOFOLLOW); err != nil {
+		return ensurePathError(err, op, name)
+	}
 	err := unix.Fchmodat(dirfd, name, uint32(mode), AT_SYMLINK_NOFOLLOW)
 	if err == unix.EOPNOTSUPP {
 		// Kernels before 6.6 do not support fchmodat2, which is needed to pass
@@ -147,6 +154,9 @@ func (fs *UnixFS) fchown(name string, uid, gid, flags int) error {
 	if err != nil {
 		return err
 	}
+	if err := fs.checkNamedLink(dirfd, name, flags); err != nil {
+		return err
+	}
 	return unix.Fchownat(dirfd, name, uid, gid, flags)
 }
 
@@ -159,6 +169,9 @@ func (fs *UnixFS) Chownat(dirfd int, name string, uid, gid int) error {
 // Lchownat is like Lchown but allows passing an existing directory file
 // descriptor rather than needing to resolve one.
 func (fs *UnixFS) Lchownat(dirfd int, name string, uid, gid int) error {
+	if err := fs.checkNamedLink(dirfd, name, AT_SYMLINK_NOFOLLOW); err != nil {
+		return ensurePathError(err, "lchownat", name)
+	}
 	return ensurePathError(unix.Fchownat(dirfd, name, uid, gid, AT_SYMLINK_NOFOLLOW), "lchownat", name)
 }
 
@@ -733,7 +746,7 @@ func (fs *UnixFS) openatResolved(dirfd int, name string, flag int, mode FileMode
 	}
 
 	if checkType {
-		if err := checkOpenedType(fd, name); err != nil {
+		if err := fs.checkOpenedType(fd, name); err != nil {
 			_ = unix.Close(fd)
 			return 0, err
 		}
@@ -788,15 +801,21 @@ func (fs *UnixFS) checkOpenedPath(fd int, name string) error {
 }
 
 // checkOpenedType returns an error if the file descriptor opened without
-// blocking is not a regular file or a directory, and otherwise switches it back
-// to blocking mode.
-func checkOpenedType(fd int, name string) error {
+// blocking is not a regular file or a directory, or is a file that also has a
+// name outside of the root (see GuardForeignLinks), and otherwise switches it
+// back to blocking mode.
+func (fs *UnixFS) checkOpenedType(fd int, name string) error {
 	var st unix.Stat_t
 	if err := unix.Fstat(fd, &st); err != nil {
 		return convertErrorType(&PathError{Op: "fstat", Path: name, Err: err})
 	}
 	if t := st.Mode & unix.S_IFMT; t != unix.S_IFREG && t != unix.S_IFDIR {
 		return &PathError{Op: "openat", Path: name, Err: ErrNotRegular}
+	}
+	// The path check that follows cannot see this: the name the file was
+	// opened by is inside the root.
+	if fs.foreignLink(&st) {
+		return &PathError{Op: "openat", Path: name, Err: ErrForeignLink}
 	}
 	if err := unix.SetNonblock(fd, false); err != nil {
 		return convertErrorType(&PathError{Op: "fcntl", Path: name, Err: err})

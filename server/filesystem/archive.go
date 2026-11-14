@@ -287,6 +287,13 @@ func (a *Archive) addToArchive(dirfd int, name, relative string, entry ufs.DirEn
 		return nil
 	}
 
+	// A file the filesystem refuses to open is left out before its header is
+	// written, since a header with no contents after it ends the archive.
+	if a.Filesystem.unixFS.ForeignLink(s) {
+		log.WithField("name", relative).Warn("skipping a file that has other hard links and belongs to someone else")
+		return nil
+	}
+
 	// Resolve the symlink target if the file is a symlink.
 	var target string
 	if s.Mode()&fs.ModeSymlink != 0 {

@@ -132,6 +132,9 @@ func (re *RequestError) asFilesystemError() (int, string) {
 	if errors.Is(err, ufs.ErrNotRegular) {
 		return http.StatusBadRequest, "Cannot perform that action: not a regular file."
 	}
+	if errors.Is(err, ufs.ErrForeignLink) {
+		return http.StatusBadRequest, "Cannot perform that action: the file is a hard link to a file that does not belong to this server."
+	}
 	if filesystem.IsErrorCode(err, filesystem.ErrCodeDiskSpace) || strings.Contains(err.Error(), "filesystem: not enough disk space") {
 		return http.StatusBadRequest, "There is not enough disk space available to perform that action."
 	}
