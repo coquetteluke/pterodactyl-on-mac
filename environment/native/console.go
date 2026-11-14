@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"emperror.dev/errors"
@@ -341,6 +342,15 @@ func (e *Environment) SendCommand(c string) error {
 		return errors.Wrap(ErrNotAttached, "environment/native: cannot send command to process")
 	}
 
+	// Commands may not contain control characters, other than tabs. The server
+	// reads its input from a terminal, where an end-of-file character closes
+	// its input for good and a stop character freezes its output.
+	if strings.ContainsFunc(c, func(r rune) bool {
+		return (r < 0x20 && r != '\t' && r != '\n' && r != '\r') || r == 0x7f
+	}) {
+		return errors.New("environment/native: command contains control characters")
+	}
+
 	// If the command being processed is the same as the process stop command then we
 	// want to mark the server as entering the stopping state otherwise the process will
 	// stop and Wings will think it has crashed and attempt to restart it.
@@ -348,8 +358,55 @@ func (e *Environment) SendCommand(c string) error {
 		e.SetState(environment.ProcessStoppingState)
 	}
 
-	if _, err := stdin.Write([]byte(c + "\n")); err != nil {
+	if err := e.writeCommand([]byte(c + "\n")); err != nil {
 		return errors.Wrap(err, "environment/native: could not write to process stdin")
+	}
+	return nil
+}
+
+// commandWriteTimeout is the amount of time allowed for a command to be written
+// to the input of a server process.
+var commandWriteTimeout = 10 * time.Second
+
+// errCommandWriteTimeout is returned when a server did not take a command in
+// time, which means it is not reading its input.
+var errCommandWriteTimeout = errors.Sentinel("timed out waiting for the process to read its input")
+
+// writeCommand writes to the console FIFO without waiting forever on a server
+// that never reads its input.
+//
+// The descriptor held in e.stdin cannot be used for this. It is the one the
+// server inherited, so it has to stay blocking, and a blocking write to a full
+// FIFO cannot be given a deadline or be interrupted by closing the file. A
+// second descriptor on the same FIFO can be non-blocking without the server
+// noticing, since that is a property of the open and not of the FIFO.
+func (e *Environment) writeCommand(b []byte) error {
+	// One command at a time, so that two long ones cannot interleave.
+	e.commandMu.Lock()
+	defer e.commandMu.Unlock()
+
+	fd, err := unix.Open(e.fifoPath(), unix.O_WRONLY|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(fd)
+
+	deadline := time.Now().Add(commandWriteTimeout)
+	for len(b) > 0 {
+		n, err := unix.Write(fd, b)
+		if n > 0 {
+			b = b[n:]
+		}
+		switch err {
+		case nil, unix.EINTR:
+		case unix.EAGAIN:
+			if time.Now().After(deadline) {
+				return errCommandWriteTimeout
+			}
+			time.Sleep(10 * time.Millisecond)
+		default:
+			return err
+		}
 	}
 	return nil
 }

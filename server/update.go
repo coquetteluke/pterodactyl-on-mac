@@ -3,10 +3,18 @@ package server
 import (
 	"time"
 
-	"github.com/pterodactyl/wings/environment/docker"
-
 	"github.com/pterodactyl/wings/environment"
+	"github.com/pterodactyl/wings/remote"
 )
+
+// stopConfigurable is an environment that is told which image a server uses and
+// how the Panel wants it stopped. Both the Docker and the native environment
+// are; asking for the behaviour rather than the Docker type is what lets the
+// native one hear about it too.
+type stopConfigurable interface {
+	SetImage(string)
+	SetStopConfiguration(remote.ProcessStopConfiguration)
+}
 
 // SyncWithEnvironment updates the environment for the server to match any of
 // the changed data. This pushes new settings and environment variables to the
@@ -31,10 +39,11 @@ func (s *Server) SyncWithEnvironment() {
 		Labels:      cfg.Labels,
 	})
 
-	// For Docker specific environments we also want to update the configured image
-	// and stop configuration.
-	if e, ok := s.Environment.(*docker.Environment); ok {
-		s.Log().Debug("syncing stop configuration with configured docker environment")
+	// Update the configured image and stop configuration. Without the latter an
+	// environment cannot tell a stop the user asked for from a crash, since the
+	// stop command being sent is the only thing that marks a server as stopping.
+	if e, ok := s.Environment.(stopConfigurable); ok {
+		s.Log().Debug("syncing stop configuration with configured environment")
 		e.SetImage(cfg.Container.Image)
 		e.SetStopConfiguration(s.ProcessConfiguration().Stop)
 	}

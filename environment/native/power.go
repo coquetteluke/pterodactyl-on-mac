@@ -313,6 +313,15 @@ func (e *Environment) onProcessExit(pid int, code uint32, wait chan struct{}) {
 	e.wait = nil
 	e.mu.Unlock()
 
+	// The supervisor at the head of the group is gone; take anything the server
+	// left running in the group with it. A container does this by itself when
+	// its main process exits. Here a process that was put in the background
+	// would otherwise outlive a server shown as offline, out of reach of the
+	// limits, the kill button, suspension and deletion, all of which give up
+	// once the leader is dead. The group id cannot be reused while a member is
+	// alive, and once none is this fails with ESRCH.
+	_ = unix.Kill(-pid, unix.SIGKILL)
+
 	_ = os.Remove(e.pidPath())
 	e.log().WithField("pid", pid).WithField("exit_code", code).Info("server process exited")
 
@@ -460,7 +469,10 @@ func (e *Environment) WaitForStop(ctx context.Context, duration time.Duration, t
 	}
 
 	if err := e.Stop(tctx); err != nil {
-		if terminate && errors.Is(err, context.DeadlineExceeded) {
+		// Any failure to ask, not only a deadline: a server that does not read
+		// its input cannot be sent its stop command at all.
+		if terminate {
+			e.log().WithField("error", err).Warn("failed to stop process")
 			return doTermination("stop")
 		}
 		return err
@@ -481,11 +493,17 @@ func (e *Environment) WaitForStop(ctx context.Context, duration time.Duration, t
 	case <-wait:
 		return nil
 	case <-ctx.Done():
-		if terminate {
-			return doTermination("parent-context")
-		}
+		// The parent context ends when wings shuts down or the server is
+		// deleted. Deletion kills the process itself, through Destroy. A
+		// shutdown must leave the server running for the next wings to adopt,
+		// even one that was in the middle of stopping.
 		return ctx.Err()
 	case <-tctx.Done():
+		// The timed context is cancelled along with the parent, so this can be
+		// the same event as above.
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if terminate {
 			return doTermination("wait")
 		}
