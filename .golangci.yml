@@ -26,6 +26,13 @@ linters:
       - linters:
           - staticcheck
         text: "QF1008:"
+      # darwin has no procfs, so process accounting and descriptor paths go
+      # through proc_info(2) and fcntl(F_GETPATH) directly. Those calls take
+      # pointers; that is all these two files use unsafe for.
+      - path: (environment/native/procinfo_darwin|internal/ufs/fdpath_darwin)\.go
+        linters:
+          - gosec
+        text: "G103:"
 
 formatters:
   enable:

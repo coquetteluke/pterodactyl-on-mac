@@ -77,7 +77,7 @@ func ensure(uuid string) (Account, error) {
 		{"-create", "/Users/" + name, "IsHidden", "1"},
 	}
 	for _, args := range steps {
-		if out, err := exec.Command(dscl, append([]string{"."}, args...)...).CombinedOutput(); err != nil {
+		if out, err := exec.Command(dscl, append([]string{"."}, args...)...).CombinedOutput(); err != nil { //nolint:gosec // dscl, with an account name derived from a validated server UUID
 			return Account{}, errors.Wrapf(err, "serveruser: dscl %s failed: %s", strings.Join(args, " "), strings.TrimSpace(string(out)))
 		}
 	}
@@ -110,7 +110,7 @@ func takenIDs() (map[int]bool, error) {
 		{"/Users", "UniqueID"},
 		{"/Groups", "PrimaryGroupID"},
 	} {
-		out, err := exec.Command(dscl, ".", "-list", path.node, path.attr).Output()
+		out, err := exec.Command(dscl, ".", "-list", path.node, path.attr).Output() //nolint:gosec // dscl with fixed arguments
 		if err != nil {
 			return nil, errors.Wrapf(err, "serveruser: could not enumerate %s", path.node)
 		}

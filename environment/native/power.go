@@ -182,7 +182,7 @@ func (e *Environment) Start(ctx context.Context) error {
 		return err
 	}
 
-	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd := exec.Command(argv[0], argv[1:]...) //nolint:gosec // the startup command is the Panel's to choose; running it is the job
 	cmd.Dir = dir
 	cmd.Env = e.processEnvironment(dir)
 	cmd.Stdin = stdin

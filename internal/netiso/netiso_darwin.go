@@ -194,7 +194,7 @@ func anchorIsReferenced() (bool, error) {
 // writeAnchorFile writes the ruleset atomically, so a reload that races with a
 // write can never read a half-written policy.
 func writeAnchorFile(body string) error {
-	if err := os.MkdirAll(filepath.Dir(AnchorPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(AnchorPath), 0o755); err != nil { //nolint:gosec // /etc/pf.anchors is a system directory that is world-readable by design
 		return errors.WithMessage(err, "netiso: failed to create the pf anchor directory")
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(AnchorPath), ".com.pterodactyl.wings.*")
@@ -212,7 +212,7 @@ func writeAnchorFile(body string) error {
 	}
 	// Readable so an operator can inspect the policy, writable only by root so
 	// that a server cannot rewrite the rules that confine it.
-	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
+	if err := os.Chmod(tmp.Name(), 0o644); err != nil { //nolint:gosec // see above: readable on purpose, and it holds no secret
 		return errors.WithMessage(err, "netiso: failed to set permissions on the pf anchor")
 	}
 	if err := os.Rename(tmp.Name(), AnchorPath); err != nil {
@@ -229,7 +229,7 @@ func run(name string, args ...string) error {
 // output runs a command and returns its combined output, folding stderr in
 // because pfctl reports both the token and its parse errors there.
 func output(name string, args ...string) (string, error) {
-	cmd := exec.Command(name, args...)
+	cmd := exec.Command(name, args...) //nolint:gosec // only ever pfctl, with arguments built in this package
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf

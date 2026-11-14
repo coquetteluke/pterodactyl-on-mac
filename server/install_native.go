@@ -108,7 +108,7 @@ func (ip *InstallationProcess) executeNative() error {
 		}
 	}()
 
-	cmd := exec.CommandContext(ctx, interpreter, scriptPath)
+	cmd := exec.CommandContext(ctx, interpreter, scriptPath) //nolint:gosec // running the egg's install script is the purpose of this function
 	cmd.Dir = ip.Server.Filesystem().Path()
 	cmd.Env = ip.nativeEnvironment()
 	cmd.Stdout = io.MultiWriter(logFile, pw)
@@ -178,7 +178,7 @@ func (ip *InstallationProcess) writeNativeScript() (string, error) {
 	script = strings.ReplaceAll(script, containerInstallPath, ip.tempDir())
 
 	path := filepath.Join(ip.tempDir(), "install.sh")
-	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil { //nolint:gosec // a script, so it has to be executable; owner only
 		return "", errors.WithMessage(err, "install: failed to write rewritten installation script")
 	}
 	return path, nil

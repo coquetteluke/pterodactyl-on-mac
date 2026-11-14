@@ -55,15 +55,15 @@ type Rule struct {
 // services. Public addresses are deliberately left alone, because a game
 // server has to reach the session servers to verify players.
 var privateRanges = []string{
-	"127.0.0.0/8",     // loopback: Wings' own API, MySQL, anything bound locally
-	"10.0.0.0/8",      // RFC1918
-	"172.16.0.0/12",   // RFC1918
-	"192.168.0.0/16",  // RFC1918
-	"169.254.0.0/16",  // link-local
-	"100.64.0.0/10",   // RFC6598, carrier NAT and Tailscale
-	"::1/128",         // loopback, v6
-	"fc00::/7",        // unique local, v6
-	"fe80::/10",       // link-local, v6
+	"127.0.0.0/8",    // loopback: Wings' own API, MySQL, anything bound locally
+	"10.0.0.0/8",     // RFC1918
+	"172.16.0.0/12",  // RFC1918
+	"192.168.0.0/16", // RFC1918
+	"169.254.0.0/16", // link-local
+	"100.64.0.0/10",  // RFC6598, carrier NAT and Tailscale
+	"::1/128",        // loopback, v6
+	"fc00::/7",       // unique local, v6
+	"fe80::/10",      // link-local, v6
 }
 
 // dnsPorts is allowed outbound regardless of destination. Resolvers usually
