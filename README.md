@@ -175,7 +175,8 @@ Or just run the plain command and pick the second option when it asks.
 Homebrew only has prebuilt packages for Apple silicon on macOS 15 or newer. On
 an Intel Mac or an older macOS it builds PHP, MariaDB and nginx from source,
 which needs the Xcode Command Line Tools and can take hours; the installer says
-so before it starts. Running only a node is not affected.
+so before it starts. A node on its own needs far less from Homebrew: `jq` and
+`wget`, if they are missing, and nothing at all if Homebrew is not installed.
 
 This installs PHP, MariaDB and nginx through Homebrew, downloads the Panel, sets
 up its database, creates an admin account, and installs wings alongside it. The
@@ -242,6 +243,10 @@ published `SHA256SUMS`, replaces it, and restarts wings.
 own sessions specifically so they survive wings restarting, and the new wings
 adopts them by pid on the way back up, so players are not disconnected. Nothing
 about your configuration or isolation is touched.
+
+A server that ran through the update keeps the sandbox it was started with.
+When a release tightens the sandbox, restart each server from the Panel at a
+quiet moment to put it under the new one.
 
 The replacement is a rename rather than a write, which is what makes swapping a
 running binary safe: writing to one directly fails with `ETXTBSY`.
@@ -500,7 +505,7 @@ It requires **Wings to run as root**, since only root may change a process's
 user, so it needs a LaunchDaemon rather than a LaunchAgent. Servers themselves
 still run unprivileged, more so than before in fact.
 
-Two things worth knowing:
+Worth knowing:
 
 - **This alone does not make the node safe for multi-tenant hosting.** Accounts
   keep servers out of each other's files, but a server can still fill the disk,
