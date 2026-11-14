@@ -127,6 +127,30 @@ func TestDecompressExtractsEntriesByType(t *testing.T) {
 	}
 }
 
+// The setuid and setgid bits of an archive entry are not carried over. Until
+// the file is handed to the server it is owned by the user wings runs as.
+func TestDecompressDropsSetuidAndSetgidBits(t *testing.T) {
+	fs, rfs := NewFs()
+	t.Cleanup(func() { _ = os.RemoveAll(rfs.root) })
+
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	require.NoError(t, tw.WriteHeader(&tar.Header{Name: "tool", Mode: 0o6755, Size: 5, Typeflag: tar.TypeReg}))
+	_, err := tw.Write([]byte("hello"))
+	require.NoError(t, err)
+	require.NoError(t, tw.Close())
+	require.NoError(t, gz.Close())
+	require.NoError(t, rfs.CreateServerFile("bundle.tar.gz", buf.Bytes()))
+
+	require.NoError(t, fs.DecompressFile(context.Background(), "/", "bundle.tar.gz"))
+
+	info, err := os.Lstat(filepath.Join(rfs.root, "server", "tool"))
+	require.NoError(t, err)
+	assert.Zero(t, info.Mode()&(iofs.ModeSetuid|iofs.ModeSetgid), "mode is %s", info.Mode())
+	assert.Equal(t, iofs.FileMode(0o755), info.Mode().Perm())
+}
+
 // A symlink in a zip archive is extracted as a symlink.
 func TestDecompressZipSymlinkEntry(t *testing.T) {
 	fs, rfs := NewFs()

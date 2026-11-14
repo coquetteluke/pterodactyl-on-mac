@@ -157,6 +157,12 @@ func (fs *Filesystem) Touch(p string, flag int) (ufs.File, error) {
 // for example to a symlink, between being checked and being opened. If flag
 // includes O_TRUNC the file is truncated after its size is read.
 func (fs *Filesystem) openForWrite(p string, flag int, mode ufs.FileMode) (ufs.File, int64, error) {
+	// Permission bits only. The mode can come from an archive or a backup, and
+	// the file belongs to whoever wings runs as until it has been written and
+	// handed over. A setuid bit from the archive would, for that long, be a
+	// setuid file owned by wings with contents the server chose. In a
+	// container nothing can run it; a server that is a host process can.
+	mode &= ufs.ModePerm
 	file, err := fs.unixFS.Touch(p, flag&^ufs.O_TRUNC, mode)
 	if err != nil {
 		return nil, 0, err
@@ -494,7 +500,8 @@ func (fs *Filesystem) Copy(p string) error {
 	for i := 0; ; i++ {
 		newName, err = fs.findCopySuffix(dirfd, baseName, extension)
 		if err == nil {
-			dst, err = fs.unixFS.OpenFileat(dirfd, newName, ufs.O_WRONLY|ufs.O_CREATE|ufs.O_EXCL, info.Mode())
+			// Permission bits only, for the reason given in openForWrite.
+			dst, err = fs.unixFS.OpenFileat(dirfd, newName, ufs.O_WRONLY|ufs.O_CREATE|ufs.O_EXCL, info.Mode().Perm())
 		}
 		if err == nil {
 			break
