@@ -114,6 +114,14 @@ func (ip *InstallationProcess) executeNative() error {
 	}
 	defer logFile.Close()
 
+	// Before the output reader below is started, since a profile that cannot
+	// be built returns from here and would leave it waiting on a pipe nothing
+	// will ever close.
+	argv, err := ip.installCommand(interpreter, scriptPath)
+	if err != nil {
+		return err
+	}
+
 	// Output goes to two places, exactly as it does under Docker: the install
 	// log on disk, and the websocket sink the Panel reads.
 	pr, pw := io.Pipe()
@@ -124,11 +132,6 @@ func (ip *InstallationProcess) executeNative() error {
 			ip.Server.Log().WithField("error", err).Warn("error processing install output lines")
 		}
 	}()
-
-	argv, err := ip.installCommand(interpreter, scriptPath)
-	if err != nil {
-		return err
-	}
 
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // running the egg's install script is the purpose of this function
 	cmd.Dir = ip.Server.Filesystem().Path()
