@@ -4,6 +4,15 @@ on:
   push:
     tags:
       - "v*"
+  # A release can also be started by hand, from the Actions tab or the API, for
+  # when the tag cannot be pushed from wherever the work was done. The tag is
+  # then created by the release itself, at the commit the workflow is run on.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to create and release, for example v1.13.5-mac.1"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -12,12 +21,35 @@ jobs:
   release:
     name: Build and publish macOS binaries
     runs-on: macos-15
+    env:
+      # The pushed tag, or the one asked for when started by hand. Only ever
+      # read from the environment, never written into a script.
+      TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - name: Code checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # A shallow clone has no previous tag to compute the changelog from.
           fetch-depth: 0
+
+      # Started by hand there is no tag yet. Make it here, so that everything
+      # below can treat both cases alike; publishing creates it on GitHub.
+      - name: Tag
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-mac\.[0-9]+$ ]]; then
+            echo "::error::the tag has to look like v1.13.5-mac.1"
+            exit 1
+          fi
+          # The checkout of a branch does not promise to bring the tags along,
+          # and both the check below and the changelog need them.
+          git fetch --quiet --tags origin
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            echo "::error::${TAG} already exists"
+            exit 1
+          fi
+          git tag "$TAG"
 
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -30,7 +62,7 @@ jobs:
           SRC_PATH: github.com/pterodactyl/wings
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
+          version="${TAG#v}"
           mkdir -p dist
           for arch in amd64 arm64; do
             GOOS=darwin GOARCH="$arch" go build -v -trimpath \
@@ -51,13 +83,13 @@ jobs:
       - name: Changelog
         run: |
           set -euo pipefail
-          previous="$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)"
+          previous="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
           if [ -n "$previous" ]; then
             echo "Changes since [\`${previous}\`](https://github.com/${GITHUB_REPOSITORY}/releases/tag/${previous}):" > /tmp/changelog.md
             echo >> /tmp/changelog.md
-            git log --no-merges --reverse --pretty='- %s' "${previous}..${GITHUB_REF_NAME}" >> /tmp/changelog.md
+            git log --no-merges --reverse --pretty='- %s' "${previous}..${TAG}" >> /tmp/changelog.md
             echo >> /tmp/changelog.md
-            echo "[Full diff](https://github.com/${GITHUB_REPOSITORY}/compare/${previous}...${GITHUB_REF_NAME})" >> /tmp/changelog.md
+            echo "[Full diff](https://github.com/${GITHUB_REPOSITORY}/compare/${previous}...${TAG})" >> /tmp/changelog.md
           else
             echo "First release." > /tmp/changelog.md
           fi
@@ -84,8 +116,11 @@ jobs:
           print(notes.replace('__CHANGELOG__', changelog), end='')
           PY
 
-          gh release create "$GITHUB_REF_NAME" \
-            --title "$GITHUB_REF_NAME" \
+          # The target only matters when the tag is not on GitHub yet, which is
+          # the started-by-hand case; a pushed tag already says where it is.
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
             --notes-file /tmp/notes.md \
             dist/wings_darwin_amd64 \
             dist/wings_darwin_arm64 \
