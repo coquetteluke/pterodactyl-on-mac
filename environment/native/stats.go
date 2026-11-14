@@ -180,15 +180,27 @@ func cpuDelta(prev, cur map[int]uint64) uint64 {
 
 // sampleGroup returns the resident memory of the server's process group and
 // each member's cumulative CPU time, keyed by pid.
+//
+// A server with an account of its own is also charged for what is running as
+// that account outside the group. Otherwise a server could put its work in a
+// process that had left the group and stay under both of its limits whatever
+// it used.
 func (e *Environment) sampleGroup(pid int) (resident uint64, cpu map[int]uint64, err error) {
 	pids, lerr := pidsInGroup(pid)
 	if lerr != nil || len(pids) == 0 {
 		// Fall back to the group leader alone.
 		pids = []int{pid}
 	}
+	for _, p := range e.strays(pid) {
+		pids = append(pids, p.pid)
+	}
 
 	cpu = make(map[int]uint64, len(pids))
 	for _, p := range pids {
+		if _, counted := cpu[p]; counted {
+			// Listed twice, having changed group between the two listings.
+			continue
+		}
 		ti, terr := pidTaskInfo(p)
 		if terr != nil {
 			// A process in the group exiting between the listing and the

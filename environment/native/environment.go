@@ -18,6 +18,9 @@
 //     directly instead of going through port mapping.
 //   - The egg's Docker image is not used to supply an interpreter. Whatever the
 //     startup command invokes must exist on the host's PATH.
+//   - Nothing holds a process in. A server is followed by its process group,
+//     and a process that leaves the group is only still followed when the
+//     server has an account of its own to know it by. See account.go.
 //
 // In exchange the server process survives a wings restart, which a plain
 // exec-and-hold-the-pipes implementation would not: stdin is a FIFO and console
@@ -88,6 +91,9 @@ type Environment struct {
 	// in that group alongside it; signals are sent to the whole group so that
 	// neither the supervisor nor a wrapper script leaves the real server
 	// orphaned, and resources are sampled across the group for the same reason.
+	//
+	// A process can leave the group. One that does is still found when the
+	// server has an account of its own; see account.go.
 	pid int
 
 	// stdin is the write end of the console FIFO. It is held open for the
@@ -103,8 +109,24 @@ type Environment struct {
 	oomKilled bool
 
 	// wait is closed when the running process is reaped, letting WaitForStop
-	// block without polling.
+	// block without polling. A new one is made for every process, so it also
+	// serves to tell one run of the server from the next.
 	wait chan struct{}
+
+	// accountMu is held while a process is started as the server's account,
+	// and while everything running as that account is killed.
+	//
+	// A process group belongs to one run of a server, so killing an old one
+	// cannot touch the next. An account belongs to the server for good, and
+	// killing by it takes whatever is running at that moment. The two must not
+	// overlap, or a sweep after the old process could kill the new one as it
+	// starts.
+	accountMu sync.Mutex
+
+	// cleared is the wait channel of the process whose account has been
+	// cleared out since it was started, if that has happened. Guarded by
+	// accountMu. See sweepAccount.
+	cleared chan struct{}
 
 	// cancelAttach tears down the console tail and the resource poller.
 	cancelAttach context.CancelFunc
@@ -252,21 +274,13 @@ func (e *Environment) currentPid() int {
 // running and refuse to boot it. The file therefore also records the process
 // start time, which the kernel supplies and which no recycled pid can match.
 func (e *Environment) readPidFile() int {
-	b, err := os.ReadFile(e.pidPath())
-	if err != nil {
-		return 0
-	}
-	var (
-		pid     int
-		startNS int64
-	)
 	// Older files hold just a pid; accept them rather than orphaning a running
 	// server across an upgrade, but they get no reuse protection.
-	n, _ := fmt.Sscanf(string(b), "%d %d", &pid, &startNS)
-	if n < 1 || pid <= 0 {
+	pid, startNS, fields := e.recordedPid()
+	if fields < 1 || pid <= 0 {
 		return 0
 	}
-	if n < 2 {
+	if fields < 2 {
 		return pid
 	}
 
@@ -279,6 +293,17 @@ func (e *Environment) readPidFile() int {
 		return 0
 	}
 	return pid
+}
+
+// recordedPid returns what the pid file holds, whether or not it still refers
+// to the process it was written for, and how many of its fields were there.
+func (e *Environment) recordedPid() (pid int, startNS int64, fields int) {
+	b, err := os.ReadFile(e.pidPath())
+	if err != nil {
+		return 0, 0, 0
+	}
+	fields, _ = fmt.Sscanf(string(b), "%d %d", &pid, &startNS)
+	return pid, startNS, fields
 }
 
 // writePidFile records the pid alongside the process start time, so a later

@@ -238,6 +238,15 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 				s.Log().WithField("error", err).Error("error checking server environment status")
 			}
 
+			// A server run as a native process can exit while wings is not
+			// running, and nothing was there to sweep up what it left behind.
+			// Do that before the server is called offline or started again.
+			if !r {
+				if env, ok := s.Environment.(interface{ SweepLeftovers() }); ok {
+					env.SweepLeftovers()
+				}
+			}
+
 			// Check if the server was previously running. If so, attempt to start the server now so that Wings
 			// can pick up where it left off. If the environment does not exist at all, just create it and then allow
 			// the normal flow to execute.

@@ -50,6 +50,10 @@ func pidsInGroup(pgid int) ([]int, error) {
 	return nil, errUnsupportedPlatform
 }
 
+func processesOwnedBy(uid int) ([]ownedProcess, error) {
+	return nil, errUnsupportedPlatform
+}
+
 func totalMemory() (uint64, error) {
 	return 0, errUnsupportedPlatform
 }

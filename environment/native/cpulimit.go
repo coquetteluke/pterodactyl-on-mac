@@ -173,11 +173,25 @@ func (e *Environment) enforceCPULimit(ctx context.Context) {
 	}
 }
 
-// resume lifts a stop from a server's process group.
+// resume lifts a stop from a server's process group, and from any process of
+// the server's outside the group that is stopped.
+//
+// The group is signalled as one. Outside it only what is stopped is, for the
+// reason processIsStopped gives: a process that is running would see the
+// signal.
 func (e *Environment) resume(pid int) {
 	if pid <= 0 {
 		return
 	}
+	resumeGroup(pid)
+	for _, p := range e.strays(pid) {
+		if p.stopped {
+			_ = unix.Kill(p.pid, unix.SIGCONT)
+		}
+	}
+}
+
+func resumeGroup(pid int) {
 	if err := unix.Kill(-pid, unix.SIGCONT); err != nil {
 		_ = unix.Kill(pid, unix.SIGCONT)
 	}
@@ -186,7 +200,10 @@ func (e *Environment) resume(pid int) {
 // pause stops a server's process group for d, then resumes it.
 //
 // The whole group is signalled so that a startup command wrapped in a shell
-// throttles the actual server rather than only its wrapper.
+// throttles the actual server rather than only its wrapper. What the server is
+// running outside the group is stopped with it. That is counted towards the
+// usage being corrected here, and left running it would have the rest of the
+// server stopped on its account while it carried on.
 func (e *Environment) pause(pid int, d time.Duration) {
 	if d <= 0 || pid <= 0 {
 		return
@@ -196,6 +213,12 @@ func (e *Environment) pause(pid int, d time.Duration) {
 			return
 		}
 	}
+	strays := e.signalStrays(pid, unix.SIGSTOP)
 	time.Sleep(d)
-	e.resume(pid)
+	resumeGroup(pid)
+	// Exactly the ones stopped above, and not whatever a second look finds:
+	// one that failed would leave a process stopped with nothing to resume it.
+	for _, p := range strays {
+		_ = unix.Kill(p, unix.SIGCONT)
+	}
 }

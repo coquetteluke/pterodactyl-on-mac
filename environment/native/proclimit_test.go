@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/pterodactyl/wings/config"
-	"github.com/pterodactyl/wings/internal/serveruser"
 	"github.com/pterodactyl/wings/remote"
 )
 
@@ -29,7 +28,7 @@ func TestProcessLimitSkippedWithoutDedicatedAccount(t *testing.T) {
 
 func TestProcessLimitAppliedWithDedicatedAccount(t *testing.T) {
 	e := newTestEnvironment(t, "run", remote.ProcessStopConfiguration{})
-	e.meta.Account = &serveruser.Account{Username: "ptero-test", UID: 900, GID: 900}
+	e.meta.Account = testAccount(t)
 
 	cfg := config.Get()
 	cfg.Docker.ContainerPidLimit = 64
@@ -62,7 +61,7 @@ func TestShellQuoteRoundTrips(t *testing.T) {
 
 func TestProcessLimitDisabledWhenZero(t *testing.T) {
 	e := newTestEnvironment(t, "run", remote.ProcessStopConfiguration{})
-	e.meta.Account = &serveruser.Account{Username: "ptero-test", UID: 900, GID: 900}
+	e.meta.Account = testAccount(t)
 
 	cfg := config.Get()
 	cfg.Docker.ContainerPidLimit = 0

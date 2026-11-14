@@ -223,7 +223,22 @@ func (e *Environment) Start(ctx context.Context) error {
 		e.log().WithField("account", account.String()).Debug("running server under its own account")
 	}
 
+	// Held from here until the new process is on record, so that nothing
+	// killing by account can run in between. See accountMu.
+	e.accountMu.Lock()
+
+	// Nothing should be running as the server's account at this point, and
+	// whatever is would be taken for part of the process about to start:
+	// counted against its limits, and in the way of the port and the files it
+	// is about to open. It is what an earlier run left behind and nothing
+	// swept up, either because that run ended while wings was not running or
+	// because its install script put something in the background.
+	if n := e.clearAccount(); n > 0 {
+		e.log().WithField("processes", n).Warn("killed processes left running as the server's account before starting it")
+	}
+
 	if err := cmd.Start(); err != nil {
+		e.accountMu.Unlock()
 		return errors.Wrap(err, "environment/native: failed to start process")
 	}
 
@@ -234,6 +249,7 @@ func (e *Environment) Start(ctx context.Context) error {
 	e.pid = pid
 	e.wait = wait
 	e.mu.Unlock()
+	e.accountMu.Unlock()
 
 	if err := e.writePidFile(pid); err != nil {
 		e.log().WithField("error", err).Warn("failed to record process id")
@@ -310,10 +326,12 @@ func (e *Environment) onProcessExit(pid int, code uint32, wait chan struct{}) {
 		return
 	}
 
-	// The server is not gone until its whole group is. Everything below,
-	// including releasing a restart that is waiting to start the next process,
-	// happens only once it is.
+	// The server is not gone until its whole group is, and with an account of
+	// its own, until everything running as that is. Everything below, including
+	// releasing a restart that is waiting to start the next process, happens
+	// only once it is.
 	e.sweepGroup(pid)
+	e.sweepAccount(wait)
 
 	e.mu.Lock()
 	if e.pid != pid {
@@ -383,6 +401,9 @@ var leftoverCommandGrace = 30 * time.Second
 //
 // The group id cannot be reused while a member is alive, and once none is the
 // signal fails with ESRCH, so this cannot reach anything else.
+//
+// It also cannot reach a process that has left the group. That is
+// sweepAccount's to deal with, where the server has an account.
 func (e *Environment) sweepGroup(pid int) {
 	e.mu.RLock()
 	stop := e.meta.Stop
@@ -588,7 +609,13 @@ func (e *Environment) WaitForStop(ctx context.Context, duration time.Duration, t
 
 // Terminate forcefully stops the server with the given signal and marks the
 // environment offline.
+//
+// With an account of its own, a server's processes outside its process group
+// are terminated too. That includes the ones left by a supervisor that is
+// already gone, which is how the kill button deals with a server that exited
+// while wings was not running.
 func (e *Environment) Terminate(ctx context.Context, signal string) error {
+	sig := signalFromName(signal)
 	pid := e.currentPid()
 	if !processIsAlive(pid) {
 		// If the process is not running, but we're not already in a stopped state go
@@ -598,17 +625,19 @@ func (e *Environment) Terminate(ctx context.Context, signal string) error {
 			e.SetState(environment.ProcessStoppingState)
 			e.SetState(environment.ProcessOfflineState)
 		}
+		e.terminateStrays(pid, sig)
 		return nil
 	}
 
 	// We set it to stopping then offline to prevent crash detection from being triggered.
 	e.SetState(environment.ProcessStoppingState)
 
-	if err := e.signalProcess(signalFromName(signal)); err != nil {
+	if err := e.signalProcess(sig); err != nil {
 		return err
 	}
 
 	e.SetState(environment.ProcessOfflineState)
+	e.terminateStrays(pid, sig)
 	return nil
 }
 
@@ -617,6 +646,10 @@ func (e *Environment) Terminate(ctx context.Context, signal string) error {
 // Addressing the group rather than the pid matters because the startup command
 // runs under a shell: signalling only the shell would leave the actual server
 // running and unsupervised.
+//
+// A process that has left the group is not signalled here. Asking a server to
+// stop is asking its main process, as it is for a container, and what is left
+// once that has exited is killed. See sweepAccount.
 func (e *Environment) signalProcess(sig unix.Signal) error {
 	pid := e.currentPid()
 	if !processIsAlive(pid) {
