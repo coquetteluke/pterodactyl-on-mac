@@ -37,6 +37,13 @@ const maxLinkDepth = 32
 // that name without following it. A link's target is read and resolved
 // against the directory it is in, and has to stay inside the root to be looked
 // at at all.
+//
+// The target is cleaned as written, where the kernel would resolve each part
+// in turn. The two differ for a target that goes up through a linked
+// directory (dir-link/../x) or ends in a slash: such a link may be reported as
+// missing, or as the file its text names. Either way the answer is about
+// something inside the root, and anything that goes on to open the path has
+// the kernel resolve it and is checked again.
 func (fs *UnixFS) statFollow(name string) (FileInfo, error) {
 	rel, err := fs.unsafePath(name)
 	if err != nil {
@@ -49,7 +56,9 @@ func (fs *UnixFS) statFollow(name string) (FileInfo, error) {
 	defer unix.Close(rootfd)
 
 	cur := rel
-	for range maxLinkDepth {
+	// One more step than there are links allowed: each link takes a step to
+	// read, and what the last one points at takes one to describe.
+	for range maxLinkDepth + 1 {
 		s, target, err := fs.describeOrReadLink(rootfd, cur)
 		if err != nil {
 			return nil, ensurePathError(err, "stat", name)
