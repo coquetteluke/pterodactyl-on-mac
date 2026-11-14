@@ -515,6 +515,16 @@ Two things worth knowing:
 - Existing servers are chowned on their next boot, so their files stop being
   readable by the account you normally log in as. Use SFTP or the Panel's file
   manager rather than editing them directly over ssh.
+- **Hard-linked files are the exception, and need handing over by hand.** A
+  file with more than one name that does not already belong to the server is
+  left as it is, because wings cannot tell a file the server linked to itself
+  from one it linked in from elsewhere on the disk. A pnpm store, a cargo build
+  directory or a local git clone looks like this the first time accounts are
+  switched on for a server that already has one. Until it is handed over, such
+  a file is missing from backups and transfers and cannot be opened in the
+  Panel. With the server stopped, once:
+  `sudo chown -R <the server's account> <the server's directory>`. The wings
+  log names the first such file and says how many there were.
 
 ## Filesystem sandbox
 
