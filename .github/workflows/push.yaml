@@ -87,6 +87,13 @@ jobs:
           # generated firewall policy is valid pf never runs above either.
           go test -c -o /tmp/netiso.test ./internal/netiso/
           sudo /tmp/netiso.test -test.run 'GeneratedRulesetParses' -test.v
+          # Giving a file to another account takes root, so what is and is
+          # not handed to a server at start, a file with a name outside of
+          # its directory above all, is only tried for real here.
+          go test -c -o /tmp/ufs.test ./internal/ufs/
+          sudo /tmp/ufs.test -test.run 'ForeignLink|HardLink|LinkTally' -test.v
+          go test -c -o /tmp/filesystem.test ./server/filesystem/
+          sudo /tmp/filesystem.test -test.run 'ForeignLink|HardLink' -test.v
 
       - name: Upload Release Artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

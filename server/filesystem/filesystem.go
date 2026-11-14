@@ -409,20 +409,18 @@ func (fs *Filesystem) Chown(p string) error {
 	// need to check if every individual path it touches is safe as the code
 	// doesn't traverse symlinks, is immune to symlink timing attacks, and
 	// gives us a dirfd and file name to make a direct syscall with.
-	var foreign int
-	var firstForeign string
+	links := fs.unixFS.NewLinkTally()
 	if err := fs.unixFS.WalkDirat(dirfd, name, func(dirfd int, name, relative string, info ufs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if err := fs.unixFS.Lchownat(dirfd, name, uid, gid); err != nil {
-			// Not handed over, and not a reason to refuse to start: the file
-			// is as usable by the server as it was when the server linked it.
+			// Not handed over here, and not a reason to refuse to start: the
+			// file is as usable by the server as it was when the server
+			// linked it. Whether it is the server's own is a question for
+			// once the walk is over.
 			if errors.Is(err, ufs.ErrForeignLink) {
-				if foreign == 0 {
-					firstForeign = relative
-				}
-				foreign++
+				links.Record(dirfd, name, relative)
 				return nil
 			}
 			return err
@@ -431,9 +429,23 @@ func (fs *Filesystem) Chown(p string) error {
 	}); err != nil {
 		return fmt.Errorf("server/filesystem: chown: failed to chown during walk function: %w", err)
 	}
-	if foreign > 0 {
-		log.WithField("path", p).WithField("count", foreign).WithField("first", firstForeign).
+
+	// A refused file whose every name was met on the walk has no name outside
+	// of the server's directory, and is the server's: its own hard-linked
+	// files, from before it had this account. See ufs.LinkTally for what is
+	// checked and what is not.
+	handed := links.HandOver(dirfd, name, uid, gid)
+	if handed.Files > 0 {
+		log.WithField("path", p).WithField("files", handed.Files).WithField("names", handed.Names).
+			Info("server/filesystem: chown: handed over hard-linked files that have no name outside of the server's directory")
+	}
+	if handed.Left > 0 {
+		log.WithField("path", p).WithField("count", handed.Left).WithField("first", handed.First).
 			Warn("server/filesystem: chown: left files that have other hard links and belong to someone else as they are")
+	}
+	if handed.Unseen > 0 {
+		log.WithField("path", p).WithField("count", handed.Unseen).
+			Warn("server/filesystem: chown: there were more hard-linked files than are looked at in one go, and some of those left were not; they are the next time")
 	}
 	return nil
 }

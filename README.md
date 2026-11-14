@@ -462,10 +462,11 @@ reasons this is not safe to rent out, and none of them is going to be fixed:
   once isolation is on, and a name in a server's directory is a file it would
   read out through the Panel, or hand to the server on its next start. The
   sandbox profile refuses the link. Wings also refuses to open, chown or chmod a
-  file that has other names and is not the server's, but that is a check on a
-  link that is sitting still: a server that makes and removes the link at the
-  right moment can get past it. So per-server accounts without the sandbox do
-  not keep a hostile server out of the rest of the machine.
+  file that has other names and is not the server's, and hands one over only
+  when every name it has is in the server's directory, but those are checks on
+  a link that is sitting still: a server that makes, moves or removes the link
+  at the right moment can get past them. So per-server accounts without the
+  sandbox do not keep a hostile server out of the rest of the machine.
 - **No disk quotas.** APFS does not support them at all, so a server can fill
   the disk and take the machine down with it. Neither does upstream enforce a
   quota at write time, but on Linux you can at least put servers on a quota'd
@@ -520,16 +521,25 @@ Worth knowing:
 - Existing servers are chowned on their next boot, so their files stop being
   readable by the account you normally log in as. Use SFTP or the Panel's file
   manager rather than editing them directly over ssh.
-- **Hard-linked files are the exception, and need handing over by hand.** A
-  file with more than one name that does not already belong to the server is
-  left as it is, because wings cannot tell a file the server linked to itself
-  from one it linked in from elsewhere on the disk. A pnpm store, a cargo build
-  directory or a local git clone looks like this the first time accounts are
-  switched on for a server that already has one. Until it is handed over, such
-  a file is missing from backups and transfers and cannot be opened in the
-  Panel. With the server stopped, once:
-  `sudo chown -R <the server's account> <the server's directory>`. The wings
-  log names the first such file and says how many there were.
+- **Hard-linked files are handed over when every name they have is in the
+  server's directory.** A file with more than one name that does not already
+  belong to the server could be one the server linked in from elsewhere on the
+  disk, so it is not chowned on sight. Wings counts instead: if the names it
+  finds in the server's directory are all the names the file has, the file is
+  the server's own and is handed over with the rest. That is what a pnpm
+  store, a cargo build directory, a conda environment or a local git clone
+  looks like the first time accounts are switched on for a server that already
+  has one, or when its account is recreated with a new uid. Several hundred
+  thousand such files are dealt with on one start; past that the rest follow
+  on the next ones, and the wings log says so.
+- **A hard-linked file with a name anywhere else is left as it is.** It keeps
+  its owner, is missing from backups and transfers, cannot be opened in the
+  Panel or over SFTP, and cannot be written by the server. The wings log names
+  the first such file and says how many there were. If one really is the
+  server's, a store shared between two servers for instance, wings cannot
+  know that and the decision is yours: with the server stopped,
+  `sudo chown -R <the server's account> <the file or directory>` hands it over
+  under every name it has, the ones outside the server's directory included.
 
 ## Filesystem sandbox
 
