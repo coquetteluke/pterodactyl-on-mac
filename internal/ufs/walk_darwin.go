@@ -41,6 +41,18 @@ func (fs *UnixFS) readDir(fd int, name, relative string, _ []byte) ([]DirEntry, 
 		return nil, ensurePathError(err, "lseek", name)
 	}
 
+	// name is the directory's last path element or ".", so to the os package
+	// it is a label for error messages and not a path: resolved, it would be
+	// looked up in the working directory. ReadDir does not resolve it. An
+	// entry the filesystem leaves untyped (DT_UNKNOWN: some network and FUSE
+	// volumes, never APFS or HFS+) is described with fstatat on the
+	// descriptor.
+	//
+	// That is so from Go 1.25.8 and 1.26.1, and go.mod requires more. Earlier
+	// releases called lstat on name/entry, which drops the entry when nothing
+	// is there and gives it the type of whatever is. Info on the entries
+	// ReadDir returns still goes by path, so only Name and Type are used.
+	// TestOSDescribesEntriesThroughDescriptor holds the os package to this.
 	f := os.NewFile(uintptr(dupfd), name)
 	if f == nil {
 		_ = unix.Close(dupfd)
@@ -74,9 +86,11 @@ func (fs *UnixFS) readDir(fd int, name, relative string, _ []byte) ([]DirEntry, 
 // modeTypeFromDirEntry is the darwin counterpart to modeTypeFromDirent. It
 // narrows an os.DirEntry to the same mode-type bits the Linux path produces.
 //
-// Go resolves d_type for us, but a DT_UNKNOWN entry (some network and fuse
-// filesystems) surfaces as ModeIrregular. In that case fall back to an lstat,
-// matching the Linux behaviour for DT_UNKNOWN/DT_WHT.
+// An entry the filesystem left untyped (DT_UNKNOWN, DT_WHT) does not arrive
+// here untyped, as it does in modeTypeFromDirent on Linux: the os package has
+// already described it through the descriptor, see readDir. ModeIrregular is
+// for a file Go has no type for. It reports none on darwin today; if it starts
+// to, ask the descriptor instead of passing the entry on as irregular.
 func (fs *UnixFS) modeTypeFromDirEntry(de os.DirEntry, fd int, name string) (FileMode, error) {
 	t := de.Type()
 	if t&ModeIrregular != 0 {
