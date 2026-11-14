@@ -107,13 +107,21 @@ adopt_existing_install() {
 # otherwise leave a game server running with nothing supervising it, which is
 # the one thing an uninstall must not do.
 stop_servers() {
-  local runtime="${DATA_DIR}/native" pidfile pid sig stopped=0
+  local runtime="${DATA_DIR}/native" pids pid sig stopped=0 reader=""
   [ -d "$runtime" ] || return 0
 
-  for pidfile in "$runtime"/*/pid; do
-    [ -f "$pidfile" ] || continue
-    pid=$(awk '{print $1; exit}' "$pidfile" 2>/dev/null || true)
-    [ -n "${pid:-}" ] && [ "$pid" -gt 0 ] 2>/dev/null || continue
+  # With isolation on wings runs as root, and each server's runtime directory
+  # and pid file are root's alone. Read as the person uninstalling, every one
+  # of them is missed and the servers are left running with nothing
+  # supervising them. The LaunchDaemon is still there at this point, and is
+  # what says wings was running as root.
+  if [ -f "/Library/LaunchDaemons/${LABEL}.plist" ]; then
+    reader=sudo
+  fi
+  pids=$($reader sh -c 'for f in "$1"/*/pid; do [ -f "$f" ] && awk "{print \$1; exit}" "$f"; done; true' sh "$runtime" 2>/dev/null || true)
+
+  for pid in $pids; do
+    [ "$pid" -gt 0 ] 2>/dev/null || continue
     # With isolation on, servers run as their own accounts, so kill -0 fails
     # with EPERM for a live process; ps tells the two apart.
     ps -p "$pid" >/dev/null 2>&1 || continue
