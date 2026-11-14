@@ -101,7 +101,7 @@ func Run(c Config) (int, error) {
 		_, _ = io.WriteString(c.Out, "[Wings] could not set the terminal size: "+err.Error()+"\n")
 	}
 
-	cmd := exec.Command(c.Args[0], c.Args[1:]...)
+	cmd := exec.Command(c.Args[0], c.Args[1:]...) //nolint:gosec // the command wings was asked to supervise
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = tty, tty, tty
 
 	// Deliberately no Setsid here.
@@ -178,7 +178,7 @@ func Run(c Config) (int, error) {
 // console log, which is what the environment did before pseudo-terminals were
 // introduced. Reached only when a terminal could not be allocated.
 func runWithoutTerminal(c Config) (int, error) {
-	cmd := exec.Command(c.Args[0], c.Args[1:]...)
+	cmd := exec.Command(c.Args[0], c.Args[1:]...) //nolint:gosec // the command wings was asked to supervise
 	cmd.Stdout, cmd.Stderr = c.Out, c.Out
 	if c.In != nil {
 		cmd.Stdin = c.In

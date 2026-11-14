@@ -34,6 +34,10 @@ curl -fsSL https://raw.githubusercontent.com/__REPO__/main/install.sh | bash -s 
 game servers, so players are not disconnected. The same command also handles
 `--turn-isolation-on`, `--turn-isolation-off`, `--uninstall` and `--purge`.
 
+A server that ran through the update keeps the sandbox it was started with.
+When a release tightens the sandbox, as this one does, restart each server from
+the Panel at a quiet moment to put it under the new one.
+
 ## Isolation is on by default
 
 Every server gets its own account, its own view of the disk and its own firewall

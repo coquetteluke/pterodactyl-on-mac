@@ -16,7 +16,12 @@ rmdebug:
 
 cross-build: clean build compress
 
+# Lint both platforms so the _darwin, _linux and _unix files are all covered.
+lint:
+	GOOS=darwin golangci-lint run ./...
+	GOOS=linux golangci-lint run ./...
+
 clean:
 	rm -rf build/wings_*
 
-.PHONY: all build compress clean
+.PHONY: all build compress clean lint

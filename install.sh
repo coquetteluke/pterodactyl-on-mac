@@ -27,9 +27,10 @@ PANEL_DIR="${PANEL_DIR:-$HOME/pterodactyl-panel}"
 PANEL_PORT="${PANEL_PORT:-8088}"
 LABEL="${WINGS_LABEL:-com.github.pterodactyl-on-mac}"
 
-# Panel 1.15 accepts PHP 8.2 or 8.3 only. Homebrew's unversioned "php" is 8.4
-# or newer, which composer refuses outright, so pin the version rather than
-# letting people discover that the hard way.
+# Panel 1.15 is tested and shipped upstream on PHP 8.2 and 8.3 only. Homebrew's
+# unversioned "php" is newer than either and keeps moving, so pin the newest
+# version upstream supports rather than letting people find out which release
+# breaks it the hard way.
 PHP_FORMULA="php@8.3"
 # The first 8.3 release fixing the PHP2Shell remote code execution bugs,
 # CVE-2026-109618 and CVE-2026-109619, which are exploited in the wild.
@@ -220,7 +221,13 @@ interview() {
       ;;
     uninstall)
       local u; u=$(fetch_helper uninstall.sh pterodactyl-uninstall)
-      if [ "$PURGE" = 1 ]; then exec "$u" --purge; else exec "$u"; fi
+      # --yes has to travel with --purge, or the helper stops at its own
+      # confirmation and, with no terminal to ask on, refuses to run at all.
+      if [ "$PURGE" = 1 ] && [ "$ASSUME_YES" = 1 ]; then exec "$u" --purge --yes
+      elif [ "$PURGE" = 1 ]; then exec "$u" --purge
+      elif [ "$ASSUME_YES" = 1 ]; then exec "$u" --yes
+      else exec "$u"
+      fi
       ;;
   esac
 
@@ -384,7 +391,12 @@ ensure_egg_tools() {
 
   if command -v brew >/dev/null 2>&1; then
     info "Installing tools that egg install scripts need: ${missing[*]}"
-    brew install "${missing[@]}" >/dev/null 2>&1 || warn "could not install: ${missing[*]}"
+    if brew_builds_from_source; then
+      warn "Homebrew has no prebuilt packages for this Mac, so these are built from source, which takes a while"
+      brew install "${missing[@]}" || warn "could not install: ${missing[*]}"
+    else
+      brew install "${missing[@]}" >/dev/null 2>&1 || warn "could not install: ${missing[*]}"
+    fi
   else
     warn "missing ${missing[*]}; most egg install scripts need them. Install Homebrew, then: brew install ${missing[*]}"
   fi
@@ -396,6 +408,19 @@ ensure_egg_tools() {
 # ---------------------------------------------------------------------------
 
 brew_prefix() { brew --prefix 2>/dev/null; }
+
+# Homebrew only publishes prebuilt packages for Apple silicon on macOS 15 or
+# newer. Anywhere else it compiles what it installs, which takes far longer
+# and, with its output hidden, looks like a hang.
+brew_builds_from_source() {
+  [ "$(uname -m)" = arm64 ] || return 0
+  local major
+  major=$(sw_vers -productVersion 2>/dev/null | cut -d. -f1 || true)
+  case "$major" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  [ "$major" -lt 15 ]
+}
 
 # rand_string prints n random alphanumerics.
 #
@@ -425,7 +450,12 @@ secure_php() {  # brew prefix
   # existing Mac would otherwise keep its vulnerable PHP.
   if [ -n "$(brew outdated --quiet "$PHP_FORMULA" 2>/dev/null || true)" ]; then
     info "Upgrading ${PHP_FORMULA} to fix CVE-2026-109618 and CVE-2026-109619"
-    brew upgrade "$PHP_FORMULA" >/dev/null || warn "brew upgrade ${PHP_FORMULA} failed"
+    if brew_builds_from_source; then
+      warn "Homebrew has no prebuilt packages for this Mac, so PHP is built from source, which can take hours"
+      brew upgrade "$PHP_FORMULA" || warn "brew upgrade ${PHP_FORMULA} failed"
+    else
+      brew upgrade "$PHP_FORMULA" >/dev/null || warn "brew upgrade ${PHP_FORMULA} failed"
+    fi
   fi
 
   ini_dir="${bp}/etc/php/${PHP_FORMULA#php@}/conf.d"
@@ -472,8 +502,14 @@ install_panel() {
   local bp php composer_bin
   bp=$(brew_prefix)
 
-  info "Installing Panel dependencies (this takes a few minutes)"
-  brew install "$PHP_FORMULA" composer mariadb nginx >/dev/null || die "brew install failed"
+  if brew_builds_from_source; then
+    warn "Homebrew has no prebuilt packages for this Mac, so it will build PHP, MariaDB and nginx from source. That needs the Xcode Command Line Tools and can take hours"
+    info "Installing Panel dependencies (building from source)"
+    brew install "$PHP_FORMULA" composer mariadb nginx || die "brew install failed"
+  else
+    info "Installing Panel dependencies (this takes a few minutes)"
+    brew install "$PHP_FORMULA" composer mariadb nginx >/dev/null || die "brew install failed"
+  fi
 
   php="${bp}/opt/${PHP_FORMULA}/bin/php"
   [ -x "$php" ] || die "expected PHP at ${php} after installing ${PHP_FORMULA}"
@@ -901,6 +937,24 @@ $(sed 's/^/    /' "${PANEL_DIR}/CREDENTIALS.txt")
 
 EOF
 else
+  # Only offered when it was declined: the installer has otherwise already set
+  # wings to start by itself, and running the command again on a Mac that now
+  # has wings on it lands in the "already has a node" menu instead.
+  if [ -f "/Library/LaunchDaemons/${LABEL}.plist" ]; then
+    autostart="     It starts by itself whenever this Mac boots."
+  elif [ "$ISOLATE" = 1 ]; then
+    # Isolation could not be switched on yet, for the reason printed above.
+    autostart="     Then switch isolation on, after which it starts by itself whenever this
+     Mac boots:
+
+       sudo ${PREFIX}/pterodactyl-isolate"
+  elif [ "$LAUNCHAGENT" = 1 ]; then
+    autostart="     Once configured it starts by itself whenever you log in."
+  else
+    autostart="     To have it start by itself later, run the installer again, choose
+     \"Reinstall it from scratch\" and say yes when it asks about starting
+     automatically."
+  fi
   cat <<EOF
 
 $(info "Next steps")
@@ -928,9 +982,7 @@ $(info "Next steps")
 
        ${PREFIX}/wings --config ${DATA_DIR}/config.yml
 
-     To keep it running across reboots:
-
-       curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | bash -s -- --launchagent
+${autostart}
 
   If your servers need to reach anything on your LAN (a database on another
   machine, say) you must also grant Local Network permission to wings under

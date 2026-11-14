@@ -27,7 +27,10 @@ func (fs *UnixFS) readDir(fd int, name, relative string, _ []byte) ([]DirEntry, 
 	// os.File takes ownership of the descriptor it wraps and will close it,
 	// but the caller still needs its fd afterwards to resolve children with
 	// *at syscalls. Hand os a duplicate instead.
-	dupfd, err := unix.Dup(fd)
+	//
+	// Close-on-exec, which plain dup does not set: a server started while a
+	// directory is being read must not inherit a descriptor for it.
+	dupfd, err := unix.FcntlInt(uintptr(fd), unix.F_DUPFD_CLOEXEC, 0)
 	if err != nil {
 		return nil, ensurePathError(err, "dup", name)
 	}

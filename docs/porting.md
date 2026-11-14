@@ -20,6 +20,18 @@ Linux-only syscalls:
   pre-5.6-kernel `openat` path that validates in userspace. `NewUnixFS` clamps
   the request so a caller asking for openat2 cannot get a filesystem where every
   operation returns `ENOSYS`.
+- **There is no `O_PATH` either.** Since v1.13.5 Wings describes the target of a
+  symlink by opening it with `O_PATH`, checking where it landed, and calling
+  `fstat`, so that `Stat` cannot be used to look at a file outside the server
+  root. `O_PATH` reaches a file without running its open routine. Any open
+  darwin offers does run it, on whatever the link points at: a FIFO gains a
+  reader, a device has its driver opened, and only then is it known to be
+  outside the root. So darwin follows the chain of links itself, opening only
+  the directory that holds each name and describing the name with
+  `fstatat(AT_SYMLINK_NOFOLLOW)`.
+- The chmod fallback for kernels without `fchmodat2` goes through an `O_PATH`
+  descriptor and procfs on Linux. darwin's `fchmodat` has always accepted
+  `AT_SYMLINK_NOFOLLOW`, so its `fchmodNoFollow` needs neither.
 - Don't reach for `x/sys/unix.Getdirentries` on darwin. It emulates `getdents`
   by re-opening the directory and skipping N entries per call, which is O(n²).
   Use `fdopendir` (via `os.File.ReadDir`).

@@ -13,6 +13,7 @@ import (
 	"emperror.dev/errors"
 
 	"github.com/pterodactyl/wings/config"
+	"github.com/pterodactyl/wings/internal/sandbox"
 	"github.com/pterodactyl/wings/internal/serveruser"
 	"github.com/pterodactyl/wings/system"
 )
@@ -36,10 +37,12 @@ const (
 // executeNative runs an egg's installation script directly on the host.
 //
 // The Docker implementation gets isolation, a guaranteed set of tooling from
-// the installer image, and resource limits. None of that is available here:
-// the script runs as the wings user against whatever binaries exist on the
-// host's PATH. Scripts that assume a Debian or Alpine userland may need
-// packages installed with Homebrew first.
+// the installer image, and resource limits. There is no installer image and
+// there are no resource limits here: the script runs against whatever binaries
+// exist on the host's PATH, so scripts that assume a Debian or Alpine userland
+// may need packages installed with Homebrew first. What isolation the server
+// process has been given, the script gets too: its account, its firewall rules
+// and its sandbox. With none of those switched on it runs as the wings user.
 func (ip *InstallationProcess) executeNative() error {
 	ctx, cancel := context.WithCancel(ip.Server.Context())
 	defer cancel()
@@ -69,19 +72,33 @@ func (ip *InstallationProcess) executeNative() error {
 		// The script runs as the server's account, so that account has to be
 		// able to read it and to write the files it installs.
 		base := filepath.Clean(config.Get().System.TmpDirectory) + string(os.PathSeparator)
-		for _, p := range []string{ip.tempDir(), scriptPath} {
+		// The script before the directory it is in. Once the directory is the
+		// account's, anything running as that account can put something else
+		// where the script was, and it would be handed that instead. Neither
+		// chown follows a link, for the same reason.
+		for _, p := range []string{scriptPath, ip.tempDir()} {
 			// Both are derived from the server's id. Refuse anything that
 			// would land outside the temporary directory rather than chown it.
 			p = filepath.Clean(p)
 			if !strings.HasPrefix(p, base) {
 				return errors.New("install: refusing to chown a path outside the temporary directory: " + p)
 			}
-			if err := os.Chown(p, account.UID, account.GID); err != nil {
+			if err := os.Lchown(p, account.UID, account.GID); err != nil {
 				return errors.Wrap(err, "install: failed to hand the installation script to the server's account")
 			}
 		}
 		if err := ip.Server.Filesystem().Chown("/"); err != nil {
 			return errors.WithMessage(err, "install: failed to hand the server's files to its account")
+		}
+	}
+
+	// The firewall policy is otherwise loaded when wings boots and when a
+	// server starts. One that has only just been created has done neither, so
+	// its install script would run before any rule named its account. This
+	// does nothing unless network isolation is on.
+	if ip.Server.applyNetworkIsolation != nil {
+		if err := ip.Server.applyNetworkIsolation(); err != nil {
+			return errors.WithMessage(err, "install: unable to apply network isolation")
 		}
 	}
 
@@ -97,6 +114,14 @@ func (ip *InstallationProcess) executeNative() error {
 	}
 	defer logFile.Close()
 
+	// Before the output reader below is started, since a profile that cannot
+	// be built returns from here and would leave it waiting on a pipe nothing
+	// will ever close.
+	argv, err := ip.installCommand(interpreter, scriptPath)
+	if err != nil {
+		return err
+	}
+
 	// Output goes to two places, exactly as it does under Docker: the install
 	// log on disk, and the websocket sink the Panel reads.
 	pr, pw := io.Pipe()
@@ -108,7 +133,7 @@ func (ip *InstallationProcess) executeNative() error {
 		}
 	}()
 
-	cmd := exec.CommandContext(ctx, interpreter, scriptPath)
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // running the egg's install script is the purpose of this function
 	cmd.Dir = ip.Server.Filesystem().Path()
 	cmd.Env = ip.nativeEnvironment()
 	cmd.Stdout = io.MultiWriter(logFile, pw)
@@ -151,6 +176,42 @@ func (ip *InstallationProcess) executeNative() error {
 	return nil
 }
 
+// installCommand returns the argv to run the install script with, wrapping it
+// in sandbox-exec when filesystem confinement is switched on.
+//
+// An install script is egg code fed with variables the server's owner sets, and
+// plenty of them go on to run whatever those variables name, so it gets the
+// policy the server process gets: wings' root directory is withheld apart from
+// the server's own files. The one addition is the directory the script itself
+// sits in, which `wings configure` puts under that root.
+//
+// The profile is passed inline for the reason given in environment/native: by
+// the time sandbox-exec runs the process may have dropped to the server's
+// account, which could not read a profile file wings had written.
+func (ip *InstallationProcess) installCommand(interpreter, scriptPath string) ([]string, error) {
+	plain := []string{interpreter, scriptPath}
+
+	cfg := config.Get()
+	if !cfg.System.Sandbox.Enabled {
+		return plain, nil
+	}
+	if !sandbox.Supported() {
+		return nil, errors.New("install: filesystem sandboxing is only available on darwin")
+	}
+
+	body, err := sandbox.Generate(sandbox.Profile{
+		ServerDir:     ip.Server.Filesystem().Path(),
+		WingsRoot:     cfg.System.RootDirectory,
+		Deny:          cfg.System.Sandbox.Deny,
+		Allow:         []string{ip.tempDir()},
+		HideProcesses: cfg.System.Sandbox.HideProcesses,
+	})
+	if err != nil {
+		return nil, errors.WrapIf(err, "install: failed to build the sandbox profile")
+	}
+	return append([]string{sandbox.ExecPath, "-p", body}, plain...), nil
+}
+
 // installAccount returns the account the install script should run as, or nil
 // to run it as wings itself. It matches the account the server process runs as.
 func (ip *InstallationProcess) installAccount() (*serveruser.Account, error) {
@@ -178,7 +239,7 @@ func (ip *InstallationProcess) writeNativeScript() (string, error) {
 	script = strings.ReplaceAll(script, containerInstallPath, ip.tempDir())
 
 	path := filepath.Join(ip.tempDir(), "install.sh")
-	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil { //nolint:gosec // a script, so it has to be executable; owner only
 		return "", errors.WithMessage(err, "install: failed to write rewritten installation script")
 	}
 	return path, nil

@@ -3,7 +3,7 @@
 Run Pterodactyl game servers natively on macOS. No virtual machine, no Docker.
 
 An **unofficial** fork of [Pterodactyl Wings](https://github.com/pterodactyl/wings),
-tracking **v1.13.3**. Not affiliated with or endorsed by the Pterodactyl project.
+tracking **v1.13.5**. Not affiliated with or endorsed by the Pterodactyl project.
 
 ## Quick start
 
@@ -172,6 +172,12 @@ curl -fsSL https://raw.githubusercontent.com/coquetteluke/pterodactyl-on-mac/mai
 
 Or just run the plain command and pick the second option when it asks.
 
+Homebrew only has prebuilt packages for Apple silicon on macOS 15 or newer. On
+an Intel Mac or an older macOS it builds PHP, MariaDB and nginx from source,
+which needs the Xcode Command Line Tools and can take hours; the installer says
+so before it starts. A node on its own needs far less from Homebrew: `jq` and
+`wget`, if they are missing, and nothing at all if Homebrew is not installed.
+
 This installs PHP, MariaDB and nginx through Homebrew, downloads the Panel, sets
 up its database, creates an admin account, and installs wings alongside it. The
 Panel ends up on `http://<your-mac>.local:8088`, with the generated admin and
@@ -180,8 +186,8 @@ database passwords written to `CREDENTIALS.txt` in the Panel directory.
 Three things it deliberately does differently from the Linux install guide, all
 of which will otherwise waste your afternoon:
 
-- **PHP is pinned to 8.3.** Panel 1.15 accepts `^8.2 || ^8.3`, and Homebrew's
-  unversioned `php` is 8.4 or newer, which composer refuses outright. It has
+- **PHP is pinned to 8.3.** Panel 1.15 is tested and shipped upstream on PHP
+  8.2 and 8.3 only, and Homebrew's unversioned `php` is newer than either. It has
   to be **8.3.36 or newer**, which fixes the PHP2Shell remote code execution
   bugs (CVE-2026-109618 and CVE-2026-109619). The installer upgrades an older
   PHP and turns off session upload progress, which the Panel does not use, as
@@ -238,6 +244,10 @@ own sessions specifically so they survive wings restarting, and the new wings
 adopts them by pid on the way back up, so players are not disconnected. Nothing
 about your configuration or isolation is touched.
 
+A server that ran through the update keeps the sandbox it was started with.
+When a release tightens the sandbox, restart each server from the Panel at a
+quiet moment to put it under the new one.
+
 The replacement is a rename rather than a write, which is what makes swapping a
 running binary safe: writing to one directly fails with `ETXTBSY`.
 
@@ -251,9 +261,10 @@ curl -fsSL https://raw.githubusercontent.com/coquetteluke/pterodactyl-on-mac/mai
 
 This stops any running servers and removes the wings binary along with whichever
 service is running it, the LaunchAgent or the LaunchDaemon. If isolation is on it
-is also undone: the firewall rules are dropped, `/etc/pf.conf` is restored, and
-your server files are handed back from the per-server accounts. It
-**leaves all of your data alone**. Server files, worlds and the Panel
+is also undone: the firewall rules are dropped and `/etc/pf.conf` is restored.
+The per-server accounts are kept, since they own your server files; turn
+isolation off first (`--turn-isolation-off`) if you want the files handed back
+to your own account. It **leaves all of your data alone**. Server files, worlds and the Panel
 database all stay, and it prints where they are so you can decide.
 
 Stopping the servers first matters: they run detached so they survive a wings
@@ -275,7 +286,7 @@ machine may be using them; the uninstaller prints the command to remove them.
 
 ### Building from source
 
-Requires Go 1.24+ and whatever runtime your servers need on the host.
+Requires Go 1.26+ and whatever runtime your servers need on the host.
 
 ```bash
 go build -o wings .
@@ -297,6 +308,16 @@ macOS this writes `~/pterodactyl/config.yml` and rewrites the directories to
 match, because the Panel emits Linux paths for every node regardless of what it
 runs. That is the whole of the setup; the rest of this section is what those
 settings mean, and what to change if you copy the YAML by hand instead.
+
+Running it again on a node that is already configured keeps what is in
+`config.yml` and only refreshes what the Panel owns: the token and node id, the
+Panel URL, the API bind address and port, the SFTP port, the TLS switch and
+certificate paths, the upload limit, debug mode and the list of allowed mounts.
+It used to rebuild the file from scratch. If you bound the API to one address
+or pointed it at your own certificate, put that back afterwards, since the
+Panel's values replace them. Directories still under `/var` or `/tmp` are moved
+to your home directory as before, unless they have something in them, in which
+case they are in use and stay where they are.
 
 Three settings matter for this fork:
 
@@ -403,14 +424,16 @@ memory limit.
 Upstream Wings runs every server in its own Docker container, and a great deal
 of Pterodactyl's security model rests on that. This fork has no containers.
 
-**Out of the box there is no isolation at all.** Every server runs as the same
+**Without isolation there is no boundary at all.** The installer turns it on
+unless you pass `--no-isolate`, but a wings you installed by hand or built from
+source starts with it off. In that state every server runs as the same
 user with that user's full filesystem access, so one server can read and modify
 another's files, and can read `config.yml`, which holds the node token that
 authenticates to your Panel. Every server can also reach anything the machine
 can: your Panel, other servers, the rest of your network.
 
-Most of that can be rebuilt from what macOS does have, but **all of it is opt-in
-and off by default**. One command turns on all three
+Most of that can be rebuilt from what macOS does have, and the installer does so
+by default. If it is off, one command turns on all three
 ([isolation](#isolation)):
 
 | what it covers | how it works | |
@@ -433,14 +456,24 @@ reasons this is not safe to rent out, and none of them is going to be fixed:
   what you name. It does not confine a server to a private view of the disk the
   way a mount namespace does, so a server can still read world-readable files
   elsewhere on the machine.
+- **Hard links are stopped by the sandbox, not by the accounts.** macOS lets a
+  process give any file on the same volume a second name in a directory it can
+  write to, without owning the file or being able to read it. Wings runs as root
+  once isolation is on, and a name in a server's directory is a file it would
+  read out through the Panel, or hand to the server on its next start. The
+  sandbox profile refuses the link. Wings also refuses to open, chown or chmod a
+  file that has other names and is not the server's, but that is a check on a
+  link that is sitting still: a server that makes and removes the link at the
+  right moment can get past it. So per-server accounts without the sandbox do
+  not keep a hostile server out of the rest of the machine.
 - **No disk quotas.** APFS does not support them at all, so a server can fill
   the disk and take the machine down with it. Neither does upstream enforce a
   quota at write time, but on Linux you can at least put servers on a quota'd
   filesystem. Here you cannot.
 
 So the shape of it: **the isolation boundaries are real, and the resource
-boundaries are not.** A hostile server can be kept out of your files, off your
-network and away from your other servers. It cannot reliably be stopped from
+boundaries are not.** With all three switched on, a hostile server can be kept
+out of your files, off your network and away from your other servers. It cannot reliably be stopped from
 degrading or halting the machine everything runs on.
 
 So: **do not rent servers on this to strangers.** If you are running a homelab
@@ -472,7 +505,7 @@ It requires **Wings to run as root**, since only root may change a process's
 user, so it needs a LaunchDaemon rather than a LaunchAgent. Servers themselves
 still run unprivileged, more so than before in fact.
 
-Two things worth knowing:
+Worth knowing:
 
 - **This alone does not make the node safe for multi-tenant hosting.** Accounts
   keep servers out of each other's files, but a server can still fill the disk,
@@ -481,9 +514,22 @@ Two things worth knowing:
   [sandbox](#filesystem-sandbox) and network rules, and read the list of what is
   still missing at the top of this file before trusting it with anyone else's
   workload.
+- **Turn the sandbox on with it.** Wings is root in this mode, and the sandbox
+  is what stops a server planting a hard link to a file elsewhere on the disk
+  for wings to act on. The installer turns both on together.
 - Existing servers are chowned on their next boot, so their files stop being
   readable by the account you normally log in as. Use SFTP or the Panel's file
   manager rather than editing them directly over ssh.
+- **Hard-linked files are the exception, and need handing over by hand.** A
+  file with more than one name that does not already belong to the server is
+  left as it is, because wings cannot tell a file the server linked to itself
+  from one it linked in from elsewhere on the disk. A pnpm store, a cargo build
+  directory or a local git clone looks like this the first time accounts are
+  switched on for a server that already has one. Until it is handed over, such
+  a file is missing from backups and transfers and cannot be opened in the
+  Panel. With the server stopped, once:
+  `sudo chown -R <the server's account> <the server's directory>`. The wings
+  log names the first such file and says how many there were.
 
 ## Filesystem sandbox
 
@@ -619,6 +665,8 @@ What each server ends up with:
 | Loopback, so Wings' API and any local database | **no** |
 | RFC1918 and CGNAT, so the Panel, your LAN, other machines | **no** |
 | Link-local and IPv6 ULA | **no** |
+| Multicast and broadcast, so mDNS, SSDP and other LAN discovery | **no** |
+| Private IPv4 addresses reached through NAT64, 6to4 or Teredo | **no** |
 
 The exceptions in `allow_out` are evaluated before the private-range blocks, so
 listing an address there genuinely reinstates it.
@@ -819,12 +867,13 @@ Pterodactyl node with no VM involved.
 
 | | upstream | this fork |
 | --- | --- | --- |
-| filesystem isolation | mount namespace per server | unix accounts + kernel sandbox, opt-in |
-| network isolation | network namespace per server | pf rules keyed on uid, opt-in |
+| filesystem isolation | mount namespace per server | unix accounts + kernel sandbox, on by default in the installer |
+| network isolation | network namespace per server | pf rules keyed on uid, on by default in the installer |
 | process isolation | PID namespace per server | separate accounts, plus optional process hiding |
 | memory limit | enforced by the kernel | enforced by supervision, ~1s latency |
 | CPU limit | enforced via cgroups | enforced by supervision, opt-in |
 | egg install | runs in the installer image | runs on the host (see below) |
+| mounts | bind-mounted into the container | not applied; a mount set in the Panel does nothing here |
 | server user | dedicated `pterodactyl` user | the user running Wings, or an account per server when isolation is on |
 
 Egg install scripts hardcode `/mnt/server` and `/mnt/install`. There is nothing
@@ -832,6 +881,13 @@ to mount those onto, and macOS's sealed root filesystem means `/mnt` cannot even
 be created, so the script text is rewritten to point at the real directories.
 This works for essentially every real egg, but a script that assembles a path at
 runtime (`cd /mnt/${dir}`) will not be caught and will fail.
+
+With isolation on, an install script runs under the server's own account,
+behind its firewall rules and inside its sandbox, like the server does. The
+sandbox makes one exception for it, the directory the script itself is written
+to. The process limit is the one thing it does not get: an install can need
+more processes than the server it sets up, so it is left to the ceiling macOS
+puts on every account.
 
 They also assume the installer image's toolbox. `curl`, `tar` and `unzip` are on
 macOS already; `jq` and `wget` are not, and plenty of eggs need them, so the

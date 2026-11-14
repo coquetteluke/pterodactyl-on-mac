@@ -3,6 +3,7 @@ package cmd
 import (
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -51,12 +52,20 @@ func init() {
 func configureCmdRun(cmd *cobra.Command, args []string) {
 	if configureArgs.AllowInsecure {
 		http.DefaultTransport.(*http.Transport).TLSClientConfig = &tls.Config{
-			InsecureSkipVerify: true,
+			InsecureSkipVerify: true, //nolint:gosec // opt-in via --allow-insecure
 		}
 	}
 
-	if _, err := os.Stat(configureArgs.ConfigPath); err == nil && !configureArgs.Override {
-		survey.AskOne(&survey.Confirm{Message: "Override existing configuration file"}, &configureArgs.Override)
+	// The configuration is written to --config-path, or to the global --config
+	// path if only that was given.
+	target := configureArgs.ConfigPath
+	if cmd != nil && !cmd.Flags().Changed("config-path") && cmd.Flags().Changed("config") {
+		target = configPath
+	}
+
+	if _, err := os.Stat(target); err == nil && !configureArgs.Override {
+		// A failed or interrupted prompt leaves Override false, which aborts below.
+		_ = survey.AskOne(&survey.Confirm{Message: "Override existing configuration file"}, &configureArgs.Override)
 		if !configureArgs.Override {
 			fmt.Println("Aborting process; a configuration file already exists for this node.")
 			os.Exit(1)
@@ -127,7 +136,6 @@ func configureCmdRun(cmd *cobra.Command, args []string) {
 		panic(err)
 	}
 
-	fmt.Printf("%+v", req.Header)
 	fmt.Println(req.URL.String())
 
 	res, err := c.Do(req)
@@ -147,31 +155,66 @@ func configureCmdRun(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	b, err := io.ReadAll(res.Body)
+	b, err := io.ReadAll(io.LimitReader(res.Body, maxConfigurationResponseSize))
 	if err != nil {
 		fmt.Println("Failed to read the configuration returned by the panel.\n", err.Error())
 		os.Exit(1)
 	}
 
-	cfg, err := config.NewAtPath(configureArgs.ConfigPath)
-	if err != nil {
-		panic(err)
+	if err := writePanelConfiguration(target, configureArgs.PanelURL, b); err != nil {
+		fmt.Println("Failed to configure wings.\n", err.Error())
+		os.Exit(1)
 	}
 
-	if err := json.Unmarshal(b, cfg); err != nil {
-		panic(err)
+	fmt.Printf("Successfully configured wings. Configuration written to %s\n", target)
+}
+
+// maxConfigurationResponseSize is the largest node configuration that is read
+// from the Panel.
+const maxConfigurationResponseSize = 1 << 20
+
+// writePanelConfiguration applies the node configuration returned by the Panel
+// to the configuration file at path, keeping any other settings already in it.
+func writePanelConfiguration(path string, panelURL string, body []byte) error {
+	cfg, err := config.Load(path)
+	if errors.Is(err, os.ErrNotExist) {
+		cfg, err = config.NewAtPath(path)
+	}
+	if err != nil {
+		return err
+	}
+
+	// Only take the values from the Panel that it is allowed to set.
+	p := cfg.PanelConfiguration()
+	if err := json.Unmarshal(body, &p); err != nil {
+		return err
+	}
+	cfg.ApplyPanelConfiguration(p)
+
+	// The node's mounts are only taken here, where the operator runs configure on
+	// the host, never through a remote update. The data directory stays local so
+	// a stale daemon base in the Panel cannot move existing servers.
+	var host struct {
+		AllowedMounts []string `json:"allowed_mounts"`
+	}
+	if err := json.Unmarshal(body, &host); err != nil {
+		return err
+	}
+	if host.AllowedMounts != nil {
+		cfg.AllowedMounts = host.AllowedMounts
 	}
 
 	// Manually specify the Panel URL as it won't be decoded from JSON.
-	cfg.PanelLocation = configureArgs.PanelURL
+	cfg.PanelLocation = panelURL
+
+	// The Panel returns the token itself.
+	if err := cfg.ResolveToken(true); err != nil {
+		return err
+	}
 
 	localizeDirectories(cfg)
 
-	if err = config.WriteToDisk(cfg); err != nil {
-		panic(err)
-	}
-
-	fmt.Printf("Successfully configured wings. Configuration written to %s\n", configureArgs.ConfigPath)
+	return config.WriteToDisk(cfg)
 }
 
 // localizeDirectories rewrites the Linux paths the Panel always generates so a
@@ -195,10 +238,40 @@ func localizeDirectories(cfg *config.Configuration) {
 	}
 	root := filepath.Join(home, "pterodactyl")
 
+	kept := relocateLinuxDefaults(cfg, root)
+
+	// The Panel pushes api.port back to the node's Daemon Port on every save,
+	// which is how a working daemon gets broken later.
+	cfg.IgnorePanelConfigUpdates = true
+
+	for _, p := range kept {
+		fmt.Printf("Keeping %s: it is already in use on this Mac.\n", p)
+	}
+}
+
+// relocateLinuxDefaults points every directory still at one of the Panel's
+// Linux defaults, or not set at all, at its place under root. It returns the
+// defaults it left alone because they are in use.
+//
+// Configuring a node again keeps what is in its file, and that includes a node
+// that really does run from /var/lib/pterodactyl, as one started as root from
+// the Panel's own YAML does. Moving its directories would leave wings looking
+// at empty ones on the next start: no servers to adopt, the running ones shown
+// as offline, and a second copy of each started beside the first. A directory
+// with something in it is taken to be in use.
+func relocateLinuxDefaults(cfg *config.Configuration, root string) (kept []string) {
 	isDefault := func(p string) bool {
 		return p == "" || strings.HasPrefix(p, "/var/") || strings.HasPrefix(p, "/tmp/")
 	}
+	inUse := func(p string) bool {
+		if p == "" {
+			return false
+		}
+		entries, err := os.ReadDir(p)
+		return err == nil && len(entries) > 0
+	}
 
+	rewrote := false
 	for _, d := range []struct {
 		field *string
 		to    string
@@ -210,16 +283,23 @@ func localizeDirectories(cfg *config.Configuration) {
 		{&cfg.System.BackupDirectory, filepath.Join(root, "backups")},
 		{&cfg.System.TmpDirectory, filepath.Join(root, "tmp")},
 	} {
-		if isDefault(*d.field) {
-			*d.field = d.to
+		if !isDefault(*d.field) || *d.field == d.to {
+			continue
 		}
+		if inUse(*d.field) {
+			kept = append(kept, *d.field)
+			continue
+		}
+		*d.field = d.to
+		rewrote = true
 	}
 
-	// The Panel pushes api.port back to the node's Daemon Port on every save,
-	// which is how a working daemon gets broken later.
-	cfg.IgnorePanelConfigUpdates = true
-
-	fmt.Printf("Rewrote the Panel's Linux directory defaults to %s (macOS).\n", root)
+	// Configuring a node again keeps the directories already in its file, so
+	// only say so when something was actually rewritten.
+	if rewrote {
+		fmt.Printf("Rewrote the Panel's Linux directory defaults to %s (macOS).\n", root)
+	}
+	return kept
 }
 
 func getRequest() (*http.Request, error) {

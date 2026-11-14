@@ -226,7 +226,7 @@ $(info "Isolation is on")
           allow_out:
             - 192.168.1.50
 
-  To undo all of this:  sudo ./isolate.sh --revert
+  To undo all of this:  sudo $0 --revert
 
 DONE
 }

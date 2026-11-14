@@ -114,6 +114,9 @@ type Environment struct {
 	logCallbackMx sync.Mutex
 	logCallback   func([]byte)
 
+	// commandMu serialises writes to the console FIFO.
+	commandMu sync.Mutex
+
 	// Tracks the environment state.
 	st *system.AtomicString
 }

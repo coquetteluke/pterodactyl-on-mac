@@ -182,7 +182,7 @@ func (e *Environment) Start(ctx context.Context) error {
 		return err
 	}
 
-	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd := exec.Command(argv[0], argv[1:]...) //nolint:gosec // the startup command is the Panel's to choose; running it is the job
 	cmd.Dir = dir
 	cmd.Env = e.processEnvironment(dir)
 	cmd.Stdin = stdin
@@ -301,9 +301,21 @@ func (e *Environment) adopt(pid int) {
 // onProcessExit records the exit of a server process and moves the environment
 // into its offline state.
 func (e *Environment) onProcessExit(pid int, code uint32, wait chan struct{}) {
-	e.mu.Lock()
 	// Guard against a stale goroutine from an earlier process clobbering the
 	// state of a newer one.
+	e.mu.RLock()
+	current := e.pid
+	e.mu.RUnlock()
+	if current != pid {
+		return
+	}
+
+	// The server is not gone until its whole group is. Everything below,
+	// including releasing a restart that is waiting to start the next process,
+	// happens only once it is.
+	e.sweepGroup(pid)
+
+	e.mu.Lock()
 	if e.pid != pid {
 		e.mu.Unlock()
 		return
@@ -328,6 +340,68 @@ func (e *Environment) onProcessExit(pid int, code uint32, wait chan struct{}) {
 	// state overwritten by the offline one above. The pid guard above means
 	// this runs exactly once per process, so the close cannot happen twice.
 	close(wait)
+}
+
+// leftoverPollInterval is how often a group whose leader has exited is checked
+// for members that are still finishing.
+const leftoverPollInterval = 100 * time.Millisecond
+
+// leftoverStopGrace is the longest a group is waited on after its leader has
+// exited during a stop. A stop or restart from the Panel gives up and kills
+// after ten minutes, which ends the wait sooner; this only bounds a stop
+// nothing is waiting on.
+var leftoverStopGrace = 15 * time.Minute
+
+// leftoverCommandGrace is how long a group is waited on when the server is
+// stopped by a command instead of a signal. See sweepGroup.
+var leftoverCommandGrace = 30 * time.Second
+
+// sweepGroup deals with whatever is left in a server's process group once the
+// supervisor at its head has exited.
+//
+// A container takes everything in it down when its main process exits. Here a
+// process the server put in the background would otherwise outlive a server
+// shown as offline, out of reach of its limits, the kill button, suspension and
+// deletion, all of which give up once the leader is dead. So what is left is
+// killed.
+//
+// Unless the server was asked to stop, in which case what is left may well be
+// the server. A startup command that is more than a single program runs under
+// a shell, and a shell dies on a stop signal at once while the program it
+// started is still saving. Killing that half a second later would cost the
+// save. It is given until the stop is abandoned: the kill button, or the
+// timeout of whoever is waiting on the stop, both of which move the state on
+// from stopping.
+//
+// That is for a stop by signal. A stop command is read by the server itself,
+// and the shell around it then lasts exactly as long as the server does. What
+// is still there once the supervisor has gone is something the server started
+// beside itself, a tunnel or a log tailer, which nobody has told to stop and
+// which would hold the server in the stopping state until it was killed. That
+// is given long enough for a server that hands its shutdown to a child and
+// exits first, and no longer.
+//
+// The group id cannot be reused while a member is alive, and once none is the
+// signal fails with ESRCH, so this cannot reach anything else.
+func (e *Environment) sweepGroup(pid int) {
+	e.mu.RLock()
+	stop := e.meta.Stop
+	e.mu.RUnlock()
+
+	grace := leftoverStopGrace
+	if stop.Type == remote.ProcessStopCommand {
+		grace = leftoverCommandGrace
+	}
+	deadline := time.Now().Add(grace)
+	for e.st.Load() == environment.ProcessStoppingState && groupHasMembers(pid) && time.Now().Before(deadline) {
+		time.Sleep(leftoverPollInterval)
+	}
+	_ = unix.Kill(-pid, unix.SIGKILL)
+}
+
+// groupHasMembers reports whether any process is left in the group.
+func groupHasMembers(pgid int) bool {
+	return unix.Kill(-pgid, 0) == nil
 }
 
 // processEnvironment builds the environment for the server process.
@@ -414,7 +488,17 @@ func (e *Environment) Stop(ctx context.Context) error {
 	}
 
 	if !processIsAlive(e.currentPid()) {
-		e.SetState(environment.ProcessOfflineState)
+		// The supervisor is gone, but its exit may still be being dealt with:
+		// while the server is stopping, whatever is left in its group is
+		// waited for, and the server is not offline until that is done. Saying
+		// so here would end that wait and have what is left killed, which a
+		// second request to stop must not do to a server that is saving.
+		e.mu.RLock()
+		exiting := e.wait != nil
+		e.mu.RUnlock()
+		if !exiting {
+			e.SetState(environment.ProcessOfflineState)
+		}
 		return nil
 	}
 
@@ -460,7 +544,10 @@ func (e *Environment) WaitForStop(ctx context.Context, duration time.Duration, t
 	}
 
 	if err := e.Stop(tctx); err != nil {
-		if terminate && errors.Is(err, context.DeadlineExceeded) {
+		// Any failure to ask, not only a deadline: a server that does not read
+		// its input cannot be sent its stop command at all.
+		if terminate {
+			e.log().WithField("error", err).Warn("failed to stop process")
 			return doTermination("stop")
 		}
 		return err
@@ -481,11 +568,17 @@ func (e *Environment) WaitForStop(ctx context.Context, duration time.Duration, t
 	case <-wait:
 		return nil
 	case <-ctx.Done():
-		if terminate {
-			return doTermination("parent-context")
-		}
+		// The parent context ends when wings shuts down or the server is
+		// deleted. Deletion kills the process itself, through Destroy. A
+		// shutdown must leave the server running for the next wings to adopt,
+		// even one that was in the middle of stopping.
 		return ctx.Err()
 	case <-tctx.Done():
+		// The timed context is cancelled along with the parent, so this can be
+		// the same event as above.
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if terminate {
 			return doTermination("wait")
 		}

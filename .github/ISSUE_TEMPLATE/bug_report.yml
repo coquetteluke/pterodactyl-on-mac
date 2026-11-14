@@ -19,7 +19,7 @@ body:
     attributes:
       label: Wings version
       description: Output of `wings version`, or `~/.local/bin/wings version`.
-      placeholder: wings v1.13.3-mac.1
+      placeholder: wings v1.13.5-mac.1
     validations:
       required: true
 
@@ -28,7 +28,7 @@ body:
     attributes:
       label: Which Mac
       options:
-        - Apple silicon (M1/M2/M3/M4)
+        - Apple silicon
         - Intel
     validations:
       required: true
