@@ -26,6 +26,11 @@ import (
 // been reached. A file the account owns gives it nothing it did not have. What
 // is left, more than one name and somebody else's, is the case refused.
 //
+// Some of what is refused is the account's own all the same: a file with
+// several names, every one of them inside the root, that belonged to someone
+// else before the account existed. Nothing about one name says so. LinkTally
+// finds those by counting the names, and hands them over.
+//
 // This is a check of a link that is sitting still. A process that makes and
 // removes the link while wings is looking can get past it, since the link
 // count is only what it was at the moment it was read. What stops the link
