@@ -62,6 +62,12 @@ func (s *Server) Mounts() []environment.Mount {
 		})
 	}
 
+	// The native environment has nothing to bind a custom mount onto, so they are
+	// reported as skipped instead of being checked and then handed to it.
+	if s.skipCustomMounts() {
+		return m
+	}
+
 	// Also include any of this server's custom mounts when returning them.
 	return append(m, s.customMounts()...)
 }
