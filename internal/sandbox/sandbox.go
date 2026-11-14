@@ -51,6 +51,17 @@ type Profile struct {
 	// that live outside Wings' directory, such as ssh keys.
 	Deny []string
 
+	// Allow lists further paths to hand back, alongside ServerDir, after
+	// everything above has been denied. The installer uses it for the
+	// directory its script is written to, which `wings configure` places
+	// inside the wings root and which the script could not otherwise be read
+	// from.
+	//
+	// A path has to exist by the time the profile is generated. One that does
+	// not cannot be resolved, and an unresolved path under /tmp or /var
+	// matches nothing, so the allowance would silently not apply.
+	Allow []string
+
 	// HideProcesses stops a server seeing any process but its own.
 	//
 	// This is the closest thing macOS has to a PID namespace. It does not
@@ -127,6 +138,21 @@ func Generate(p Profile) (string, error) {
 		fmt.Fprintf(&b, "(deny file-read* file-write* %s)\n", subpath(resolve(d)))
 	}
 	if len(p.Deny) > 0 {
+		b.WriteString("\n")
+	}
+
+	for _, a := range p.Allow {
+		if !filepath.IsAbs(a) {
+			return "", errors.Errorf("sandbox: allow path must be absolute, got %q", a)
+		}
+		// An allowance that contained the wings root would hand back everything
+		// the profile exists to withhold.
+		if root != "." && root != "" && within(root, resolve(a)) {
+			return "", errors.Errorf("sandbox: allow path %q contains the wings root, which would undo the confinement", a)
+		}
+		fmt.Fprintf(&b, "(allow file-read* file-write* %s)\n", subpath(resolve(a)))
+	}
+	if len(p.Allow) > 0 {
 		b.WriteString("\n")
 	}
 

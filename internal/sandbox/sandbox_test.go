@@ -96,6 +96,43 @@ func TestGenerateIncludesExtraDenies(t *testing.T) {
 	}
 }
 
+// An extra allowance has to follow the denials for the same reason the server's
+// own directory does, or the path it names stays withheld.
+func TestGenerateOrdersExtraAllowsAfterDenies(t *testing.T) {
+	got, err := Generate(Profile{
+		ServerDir: "/srv/p/volumes/abc",
+		WingsRoot: "/srv/p",
+		Deny:      []string{"/Users/someone/.ssh"},
+		Allow:     []string{"/srv/p/tmp/abc"},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	allow := strings.Index(got, `(allow file-read* file-write* (subpath "/srv/p/tmp/abc"))`)
+	if allow == -1 {
+		t.Fatalf("expected the extra allow:\n%s", got)
+	}
+	for _, deny := range []string{
+		`(deny file-read* file-write* (subpath "/srv/p"))`,
+		`(deny file-read* file-write* (subpath "/Users/someone/.ssh"))`,
+	} {
+		if i := strings.Index(got, deny); i == -1 || i > allow {
+			t.Errorf("expected %s before the extra allow:\n%s", deny, got)
+		}
+	}
+}
+
+func TestGenerateRejectsAllowThatUndoesTheProfile(t *testing.T) {
+	if _, err := Generate(Profile{ServerDir: "/srv/p/v/a", WingsRoot: "/srv/p", Allow: []string{"rel"}}); err == nil {
+		t.Fatal("expected an error for a relative allow path")
+	}
+	for _, allow := range []string{"/srv/p", "/srv", "/"} {
+		if _, err := Generate(Profile{ServerDir: "/srv/p/v/a", WingsRoot: "/srv/p", Allow: []string{allow}}); err == nil {
+			t.Errorf("expected an error for an allow path of %q, which contains the wings root", allow)
+		}
+	}
+}
+
 // The unit tests above assert what the profile says. This asserts the kernel
 // agrees, which is the failure they cannot catch: a profile that reads
 // correctly but is rejected leaves a server that will not start, and one that
@@ -126,7 +163,20 @@ func TestProfileIsEnforcedByTheKernel(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	body, err := Generate(Profile{ServerDir: serverDir, WingsRoot: root})
+	// What the installer asks for: its script sits in a directory of its own
+	// under the wings root, next to other servers' scripts.
+	installDir := filepath.Join(root, "tmp", "abc")
+	siblingInstallDir := filepath.Join(root, "tmp", "def")
+	for _, d := range []string{installDir, siblingInstallDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(d, "install.sh"), []byte("echo installed\n"), 0o755); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+
+	body, err := Generate(Profile{ServerDir: serverDir, WingsRoot: root, Allow: []string{installDir}})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -152,6 +202,12 @@ func TestProfileIsEnforcedByTheKernel(t *testing.T) {
 	}
 	if err := confined("/bin/cat", siblingFile); err == nil {
 		t.Error("server read another server's files")
+	}
+	if err := confined("/bin/sh", filepath.Join(installDir, "install.sh")); err != nil {
+		t.Errorf("an install script should be readable from the directory it was allowed: %v", err)
+	}
+	if err := confined("/bin/sh", filepath.Join(siblingInstallDir, "install.sh")); err == nil {
+		t.Error("an allowance for one install directory let another server's script be read")
 	}
 	// The confinement is worthless if a child process escapes it.
 	if err := confined("/bin/sh", "-c", "cat "+secret); err == nil {

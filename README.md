@@ -854,9 +854,12 @@ be created, so the script text is rewritten to point at the real directories.
 This works for essentially every real egg, but a script that assembles a path at
 runtime (`cd /mnt/${dir}`) will not be caught and will fail.
 
-With isolation on, an install script runs under the server's own account and
-behind its firewall rules, like the server does. It is not wrapped in the
-kernel sandbox, which only the server process gets.
+With isolation on, an install script runs under the server's own account,
+behind its firewall rules and inside its sandbox, like the server does. The
+sandbox makes one exception for it, the directory the script itself is written
+to. The process limit is the one thing it does not get: an install can need
+more processes than the server it sets up, so it is left to the ceiling macOS
+puts on every account.
 
 They also assume the installer image's toolbox. `curl`, `tar` and `unzip` are on
 macOS already; `jq` and `wget` are not, and plenty of eggs need them, so the

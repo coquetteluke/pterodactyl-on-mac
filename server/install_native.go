@@ -13,6 +13,7 @@ import (
 	"emperror.dev/errors"
 
 	"github.com/pterodactyl/wings/config"
+	"github.com/pterodactyl/wings/internal/sandbox"
 	"github.com/pterodactyl/wings/internal/serveruser"
 	"github.com/pterodactyl/wings/system"
 )
@@ -36,10 +37,12 @@ const (
 // executeNative runs an egg's installation script directly on the host.
 //
 // The Docker implementation gets isolation, a guaranteed set of tooling from
-// the installer image, and resource limits. None of that is available here:
-// the script runs as the wings user against whatever binaries exist on the
-// host's PATH. Scripts that assume a Debian or Alpine userland may need
-// packages installed with Homebrew first.
+// the installer image, and resource limits. There is no installer image and
+// there are no resource limits here: the script runs against whatever binaries
+// exist on the host's PATH, so scripts that assume a Debian or Alpine userland
+// may need packages installed with Homebrew first. What isolation the server
+// process has been given, the script gets too: its account, its firewall rules
+// and its sandbox. With none of those switched on it runs as the wings user.
 func (ip *InstallationProcess) executeNative() error {
 	ctx, cancel := context.WithCancel(ip.Server.Context())
 	defer cancel()
@@ -118,7 +121,12 @@ func (ip *InstallationProcess) executeNative() error {
 		}
 	}()
 
-	cmd := exec.CommandContext(ctx, interpreter, scriptPath) //nolint:gosec // running the egg's install script is the purpose of this function
+	argv, err := ip.installCommand(interpreter, scriptPath)
+	if err != nil {
+		return err
+	}
+
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // running the egg's install script is the purpose of this function
 	cmd.Dir = ip.Server.Filesystem().Path()
 	cmd.Env = ip.nativeEnvironment()
 	cmd.Stdout = io.MultiWriter(logFile, pw)
@@ -159,6 +167,42 @@ func (ip *InstallationProcess) executeNative() error {
 		return errors.Wrap(runErr, "install: failed to run installation script")
 	}
 	return nil
+}
+
+// installCommand returns the argv to run the install script with, wrapping it
+// in sandbox-exec when filesystem confinement is switched on.
+//
+// An install script is egg code fed with variables the server's owner sets, and
+// plenty of them go on to run whatever those variables name, so it gets the
+// policy the server process gets: wings' root directory is withheld apart from
+// the server's own files. The one addition is the directory the script itself
+// sits in, which `wings configure` puts under that root.
+//
+// The profile is passed inline for the reason given in environment/native: by
+// the time sandbox-exec runs the process may have dropped to the server's
+// account, which could not read a profile file wings had written.
+func (ip *InstallationProcess) installCommand(interpreter, scriptPath string) ([]string, error) {
+	plain := []string{interpreter, scriptPath}
+
+	cfg := config.Get()
+	if !cfg.System.Sandbox.Enabled {
+		return plain, nil
+	}
+	if !sandbox.Supported() {
+		return nil, errors.New("install: filesystem sandboxing is only available on darwin")
+	}
+
+	body, err := sandbox.Generate(sandbox.Profile{
+		ServerDir:     ip.Server.Filesystem().Path(),
+		WingsRoot:     cfg.System.RootDirectory,
+		Deny:          cfg.System.Sandbox.Deny,
+		Allow:         []string{ip.tempDir()},
+		HideProcesses: cfg.System.Sandbox.HideProcesses,
+	})
+	if err != nil {
+		return nil, errors.WrapIf(err, "install: failed to build the sandbox profile")
+	}
+	return append([]string{sandbox.ExecPath, "-p", body}, plain...), nil
 }
 
 // installAccount returns the account the install script should run as, or nil
