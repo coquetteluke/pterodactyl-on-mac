@@ -77,7 +77,7 @@ func newRestoreTestServer(t *testing.T) (*Server, string, string) {
 
 	root := filepath.Join(t.TempDir(), "server")
 	require.NoError(t, os.Mkdir(root, 0o755))
-	s.fs, err = filesystem.New(root, 0, nil, filesystem.Owner{})
+	s.fs, err = filesystem.New(root, 0, nil, filesystem.DefaultOwner())
 	require.NoError(t, err)
 
 	return s, backupDir, root

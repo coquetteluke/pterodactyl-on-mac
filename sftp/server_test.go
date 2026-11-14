@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -53,6 +54,12 @@ func dial(t *testing.T, addr string, from string) (net.Conn, bool) {
 	d := net.Dialer{LocalAddr: &net.TCPAddr{IP: net.ParseIP(from)}}
 	conn, err := d.Dial("tcp", addr)
 	if err != nil {
+		// Linux answers on all of 127.0.0.0/8. macOS only configures 127.0.0.1
+		// on lo0, so a second source address cannot be bound there without an
+		// alias being added to the interface first.
+		if errors.Is(err, syscall.EADDRNOTAVAIL) {
+			t.Skipf("no loopback address %s on this machine: %v", from, err)
+		}
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
