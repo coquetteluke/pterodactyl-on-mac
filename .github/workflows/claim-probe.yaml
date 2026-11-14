@@ -1,0 +1,139 @@
+name: Claim probe (temporary)
+
+# Temporary. Runs the two macOS checks that claims in the README and installer
+# rest on, on GitHub's macOS runners. Dropped before this branch becomes a pull
+# request; nothing here is meant to be merged.
+
+on:
+  push:
+    branches:
+      - claude/inspiring-davinci-40wf7l
+
+permissions:
+  contents: read
+
+jobs:
+  low-port:
+    name: Low port bind (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-26, macos-15-intel]
+    steps:
+      - name: Bind ports below 1024 without root
+        run: |
+          set +e
+          sw_vers
+          uname -m
+          echo "user $(id -un) uid $(id -u)"
+
+          echo "--- python3 -m http.server 443"
+          python3 -m http.server 443 > /tmp/http443.log 2>&1 &
+          pid=$!
+          sleep 4
+          if kill -0 "$pid" 2>/dev/null; then
+            echo "RESULT http.server 443: listening"
+            lsof -nP -a -p "$pid" -iTCP -sTCP:LISTEN
+            curl -sS -o /dev/null -w 'RESULT GET http://127.0.0.1:443/ -> %{http_code}\n' http://127.0.0.1:443/
+            kill "$pid"
+          else
+            echo "RESULT http.server 443: exited"
+          fi
+          cat /tmp/http443.log
+
+          echo "--- bind matrix"
+          python3 - <<'EOF'
+          import os
+          import socket
+
+
+          def lan_ip():
+              s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+              try:
+                  s.connect(("192.0.2.1", 9))
+                  return s.getsockname()[0]
+              except OSError:
+                  return None
+              finally:
+                  s.close()
+
+
+          cases = [
+              (socket.AF_INET, "0.0.0.0"),
+              (socket.AF_INET, "127.0.0.1"),
+              (socket.AF_INET6, "::"),
+              (socket.AF_INET6, "::1"),
+          ]
+          ip = lan_ip()
+          if ip:
+              cases.append((socket.AF_INET, ip))
+
+          for port in (80, 443, 1023, 8443):
+              for fam, addr in cases:
+                  s = socket.socket(fam, socket.SOCK_STREAM)
+                  s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                  try:
+                      s.bind((addr, port))
+                      s.listen(1)
+                      r = "ok"
+                  except OSError as e:
+                      r = "FAILED: %s" % e
+                  finally:
+                      s.close()
+                  print("RESULT bind %s port %d as uid %d: %s" % (addr, port, os.getuid(), r))
+          EOF
+
+  redis:
+    name: Homebrew Redis (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-26]
+    steps:
+      - name: Install and start Homebrew's Redis with its shipped config
+        run: |
+          set +e
+          sw_vers
+          uname -m
+          brew update > /dev/null 2>&1
+          brew install redis 2>&1 | tail -15
+          brew list --versions redis
+          bp="$(brew --prefix)"
+          conf="$bp/etc/redis.conf"
+
+          echo "--- module lines in $conf"
+          grep -n 'loadmodule' "$conf"
+          ls -l "$bp/opt/redis/lib/redis/modules/"
+
+          echo "--- redis-server with the shipped config, in the foreground"
+          "$bp/bin/redis-server" "$conf" > /tmp/redis-fg.log 2>&1 &
+          pid=$!
+          sleep 6
+          if kill -0 "$pid" 2>/dev/null; then
+            echo "RESULT redis-server with shipped config: running"
+          else
+            echo "RESULT redis-server with shipped config: exited"
+          fi
+          echo "RESULT ping: $("$bp/bin/redis-cli" ping 2>&1)"
+          "$bp/bin/redis-cli" info server | grep -E 'redis_version|^os:|arch_bits'
+          echo "modules:"
+          "$bp/bin/redis-cli" module list
+          "$bp/bin/redis-cli" set probe ok
+          echo "RESULT get: $("$bp/bin/redis-cli" get probe 2>&1)"
+          "$bp/bin/redis-cli" shutdown nosave
+          sleep 2
+          echo "--- foreground log"
+          cat /tmp/redis-fg.log
+
+          echo "--- brew services start redis"
+          brew services start redis
+          sleep 8
+          brew services list | grep -i redis
+          echo "RESULT ping via service: $("$bp/bin/redis-cli" ping 2>&1)"
+          echo "--- service log"
+          tail -40 "$bp/var/log/redis.log"
+          brew services stop redis
