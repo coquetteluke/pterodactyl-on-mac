@@ -42,10 +42,15 @@ func openDescriptorCount(t *testing.T) int {
 	if runtime.GOOS == "darwin" {
 		dir = "/dev/fd"
 	}
-	entries, err := os.ReadDir(dir)
+	// Names only. Describing each entry would stat the descriptor being used
+	// to read the directory, which is gone by the time it is looked at.
+	d, err := os.Open(dir)
+	require.NoError(t, err)
+	defer d.Close()
+	names, err := d.Readdirnames(-1)
 	require.NoError(t, err)
 
-	return len(entries)
+	return len(names)
 }
 
 // Stat does not describe a file outside the root that a symlink points at.
