@@ -32,7 +32,7 @@ import (
 // being made at all is the sandbox profile; see internal/sandbox.
 func (fs *UnixFS) GuardForeignLinks(uid int) {
 	fs.guardLinks = true
-	fs.linkOwner = uint32(uid)
+	fs.linkOwner = int64(uid)
 }
 
 // foreignLink reports whether st describes a file that has names this
@@ -42,7 +42,9 @@ func (fs *UnixFS) foreignLink(st *unix.Stat_t) bool {
 	return fs.guardLinks &&
 		st.Mode&unix.S_IFMT != unix.S_IFDIR &&
 		st.Nlink > 1 &&
-		st.Uid != fs.linkOwner
+		// Compared at a width that holds both, so that an id which does not
+		// fit the kernel's type matches no file instead of wrapping onto one.
+		int64(st.Uid) != fs.linkOwner
 }
 
 // ForeignLink reports whether info describes a file that GuardForeignLinks

@@ -38,7 +38,7 @@ type UnixFS struct {
 
 	// guardLinks and linkOwner are set by GuardForeignLinks.
 	guardLinks bool
-	linkOwner  uint32
+	linkOwner  int64
 }
 
 // NewUnixFS creates a new sandboxed unix filesystem. BasePath is used as the
