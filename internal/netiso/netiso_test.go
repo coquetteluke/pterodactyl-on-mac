@@ -1,6 +1,7 @@
 package netiso
 
 import (
+	"net"
 	"strings"
 	"testing"
 )
@@ -15,6 +16,56 @@ func TestRulesetConfinesPrivateRanges(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing block for %s\n%s", cidr, got)
 		}
+	}
+}
+
+// Reaching the LAN does not take a unicast address on it. Multicast and
+// broadcast get to every host at once, and a network that translates between
+// IPv6 and IPv4 gives each private IPv4 address a second, IPv6 spelling.
+func TestRulesetConfinesTheOtherWaysOntoTheLAN(t *testing.T) {
+	got, err := Ruleset([]Rule{{UUID: "abc", UID: 700, Ports: []int{25565}}})
+	if err != nil {
+		t.Fatalf("Ruleset: %v", err)
+	}
+	for _, cidr := range []string{
+		"224.0.0.0/4",         // mDNS and SSDP live here
+		"240.0.0.0/4",         // 255.255.255.255
+		"ff00::/8",            // IPv6 multicast
+		"64:ff9b::7f00:0/104", // 127.0.0.0/8 behind NAT64
+		"64:ff9b::a00:0/104",  // 10.0.0.0/8
+		"64:ff9b::ac10:0/108", // 172.16.0.0/12
+		"64:ff9b::c0a8:0/112", // 192.168.0.0/16
+		"64:ff9b::a9fe:0/112", // 169.254.0.0/16
+		"64:ff9b::6440:0/106", // 100.64.0.0/10
+		"2002::/16",           // 6to4
+	} {
+		want := "block drop out quick from any to " + cidr + " user 700"
+		if !strings.Contains(got, want) {
+			t.Errorf("missing block for %s\n%s", cidr, got)
+		}
+	}
+	// Proxy tools on macOS route the public internet through this range.
+	if strings.Contains(got, "198.18.") {
+		t.Errorf("198.18.0.0/15 must stay reachable\n%s", got)
+	}
+}
+
+// Every range has to be something pf and the net package agree is a network.
+func TestPrivateRangesAreValidNetworks(t *testing.T) {
+	seen := make(map[string]bool)
+	for _, cidr := range privateRanges {
+		ip, n, err := net.ParseCIDR(cidr)
+		if err != nil {
+			t.Errorf("%s: %v", cidr, err)
+			continue
+		}
+		if !ip.Equal(n.IP) {
+			t.Errorf("%s has bits set beyond its prefix; the network is %s", cidr, n)
+		}
+		if seen[cidr] {
+			t.Errorf("%s is listed twice", cidr)
+		}
+		seen[cidr] = true
 	}
 }
 

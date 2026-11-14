@@ -83,6 +83,10 @@ jobs:
         run: |
           go test -c -o /tmp/native.test ./environment/native/
           sudo /tmp/native.test -test.run 'DedicatedAccount' -test.v
+          # pfctl will not parse a ruleset without root, so the check that the
+          # generated firewall policy is valid pf never runs above either.
+          go test -c -o /tmp/netiso.test ./internal/netiso/
+          sudo /tmp/netiso.test -test.run 'GeneratedRulesetParses' -test.v
 
       - name: Upload Release Artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

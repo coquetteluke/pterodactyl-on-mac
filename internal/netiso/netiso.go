@@ -54,16 +54,61 @@ type Rule struct {
 // link-local range that carries mDNS and, on macOS, the cloud identity
 // services. Public addresses are deliberately left alone, because a game
 // server has to reach the session servers to verify players.
-var privateRanges = []string{
+//
+// Multicast and broadcast are here because they reach every host on the LAN at
+// once: service discovery, and anything that answers it. The NAT64 entries are
+// the IPv4 ranges above again, as a network that translates between the two
+// spells them; they are derived rather than written out so the two lists
+// cannot drift apart. 6to4 and Teredo addresses carry an IPv4 destination
+// inside them in the same way, and neither has a use that is worth the hole.
+//
+// 198.18.0.0/15 is deliberately not here, although Wings treats it as internal
+// when it downloads a file on a user's behalf. Proxy tools on macOS hand out
+// addresses from it in place of real ones, so on a Mac running one it is where
+// every connection to the public internet goes.
+var privateRanges = buildPrivateRanges()
+
+// privateRangesV4 are the IPv4 ranges a confined server is kept away from,
+// each of which is also blocked in its NAT64 form.
+var privateRangesV4 = []string{
 	"127.0.0.0/8",    // loopback: Wings' own API, MySQL, anything bound locally
 	"10.0.0.0/8",     // RFC1918
 	"172.16.0.0/12",  // RFC1918
 	"192.168.0.0/16", // RFC1918
 	"169.254.0.0/16", // link-local
 	"100.64.0.0/10",  // RFC6598, carrier NAT and Tailscale
-	"::1/128",        // loopback, v6
-	"fc00::/7",       // unique local, v6
-	"fe80::/10",      // link-local, v6
+}
+
+func buildPrivateRanges() []string {
+	ranges := append([]string(nil), privateRangesV4...)
+	ranges = append(ranges,
+		"0.0.0.0/8",   // "this network", which some stacks deliver to the host itself
+		"224.0.0.0/4", // multicast: mDNS, SSDP and the rest of LAN discovery
+		"240.0.0.0/4", // reserved, and the limited broadcast address at the end of it
+		"::1/128",     // loopback, v6
+		"fc00::/7",    // unique local, v6
+		"fe80::/10",   // link-local, v6
+		"fec0::/10",   // site-local, v6, deprecated but still routed where it is used
+		"ff00::/8",    // multicast, v6
+		"2002::/16",   // 6to4, which embeds an IPv4 destination
+		"2001::/32",   // Teredo, likewise
+	)
+	for _, cidr := range privateRangesV4 {
+		ranges = append(ranges, nat64(cidr))
+	}
+	return ranges
+}
+
+// nat64 returns an IPv4 range as it appears behind the well-known NAT64
+// prefix, 64:ff9b::/96, which carries the IPv4 address in its last 32 bits.
+func nat64(cidr string) string {
+	_, n, err := net.ParseCIDR(cidr)
+	if err != nil {
+		panic("netiso: invalid private range " + cidr)
+	}
+	ip := n.IP.To4()
+	ones, _ := n.Mask.Size()
+	return fmt.Sprintf("64:ff9b::%x:%x/%d", uint16(ip[0])<<8|uint16(ip[1]), uint16(ip[2])<<8|uint16(ip[3]), 96+ones)
 }
 
 // dnsPorts is allowed outbound regardless of destination. Resolvers usually
